@@ -1,6 +1,7 @@
 import sys
 import argparse
 import math
+import os
 
 KILO = 1000
 MEGA = 1000000
@@ -128,6 +129,9 @@ PCIE_ENERGY = 4.4
 WORD_SIZE = 256
 
 def command_processor(stat_path):
+    if not os.path.exists(stat_path) or os.stat(stat_path).st_size == 0:
+        raise ValueError(f"Ramulator log is missing or empty: {stat_path}")
+
     file = open(stat_path, 'r')
     lines = file.readlines()
     file.close()
@@ -176,7 +180,7 @@ def command_processor(stat_path):
     stat["precharged_latency"] = stat["precharged_cycles"] / CH_PER_DV * KILO / FREQ
     # % (average of all channels)
     if stat["cycles"] == 0:
-        print(stat_path)
+        raise ValueError(f"No memory_system_cycles found in Ramulator log: {stat_path}")
     stat["utilization"] = 100.00 - (stat["idle_cycles"] / CH_PER_DV / stat["cycles"]) * 100.00
     return stat
 

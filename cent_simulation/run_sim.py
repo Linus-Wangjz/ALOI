@@ -11,6 +11,7 @@ from utils import InOut_latency, n_heads, gqa_factor, embedding_size, ffn_size, 
 def get_args():
     parser = argparse.ArgumentParser('run_scripts.py')
     parser.add_argument("--num_channels", type=int, help="Number of channels per device", default=32)
+    parser.add_argument("--num_banks", "--num-banks", dest="num_banks", type=int, help="Number of banks per channel", default=16)
     parser.add_argument("--num_devices", type=int, help="Number of CXL devices", default=32)
     parser.add_argument("--PCIE_lanes", type=int, help="Number of PCIE lanes", default=144)
     parser.add_argument("--reuse_size", type=int, help="GB reuse size, depending on register number", default=32)
@@ -21,9 +22,9 @@ def get_args():
     parser.add_argument("--simulate_trace", action="store_true", help="Simulate traces")
     parser.add_argument("--process_results", action="store_true", help="Process results")
     parser.add_argument("--update_csv", action="store_true", help="Update results to csv file")
-    parser.add_argument("--simulation_result_path", type=str, help="Path to the result file", default="simulation_results.csv")
+    parser.add_argument("--simulation_result_path", type=str, help="Path to the result file")
     parser.add_argument("--process_throughputs", action="store_true", help="average throughputs for various seqlen")
-    parser.add_argument("--processed_result_path", type=str, help="Path to the final result file", default="processed_results.csv")
+    parser.add_argument("--processed_result_path", type=str, help="Path to the final result file")
     parser.add_argument("--phase", choices=["end2end", "prefill", "decoding"], help="Phase of the model", default="end2end")
     parser.add_argument("--prefill", type=int, help="Prefill length", default=512)
     parser.add_argument("--decoding", type=int, help="Decoding length", default=3584)
@@ -32,6 +33,10 @@ def get_args():
     parser.add_argument("--model_parallel", action="store_true", help="Apply model parallelism")
     parser.add_argument("--inter-device-attention", action="store_true")
     args = parser.parse_args()
+    if args.simulation_result_path is None:
+        args.simulation_result_path = default_simulation_result_path(args)
+    if args.processed_result_path is None:
+        args.processed_result_path = default_processed_result_path(args)
     return args
 
 
@@ -43,6 +48,35 @@ def factorize(n):
             if i != n // i:
                 factors.append(n // i)
     return sorted(factors)
+
+
+def trace_root(args):
+    return f"../trace/{args.num_channels}_channels_{args.num_banks}_banks_per_device"
+
+
+def result_tag(args):
+    return f"{args.num_channels}_channels_{args.num_banks}_banks_per_device"
+
+
+def default_simulation_result_path(args):
+    return f"simulation_results_{result_tag(args)}.csv"
+
+
+def default_processed_result_path(args):
+    return f"processed_results_{result_tag(args)}.csv"
+
+
+def missing_or_empty(file):
+    return not os.path.exists(file) or os.stat(file).st_size == 0
+
+
+def run_checked_command(command):
+    result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if result.returncode != 0:
+        command_str = " ".join(command)
+        raise RuntimeError(f"Command failed with exit code {result.returncode}: {command_str}\n{result.stdout}\n{result.stderr}")
+    return result
+
 
 def generate_trace(args, seqlen_list):
 
@@ -59,34 +93,35 @@ def generate_trace(args, seqlen_list):
     blocks_per_device = (TransformerBlock_number[args.model] - 1) // args.num_devices + 1
     channels_per_block = args.num_channels // blocks_per_device
     FC_devices_list = factorize(args.num_devices)
+    trace_root_dir = trace_root(args)
 
     # Embedding
     seqlen = args.prefill + args.decoding
     if args.model_parallel:
         for FC_devices in FC_devices_list:
-            if not os.path.exists(f"../trace/{args.num_channels}_channels_per_device/model_parallel_embedding/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"):
-                commands_generate_traces.append(["python3", "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--embedding", "--only-trace", "--num-channels", str(args.num_channels), "--FC-devices", str(FC_devices), "--model-parallel", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", f"../trace/{args.num_channels}_channels_per_device/model_parallel_embedding/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"])
+            if missing_or_empty(f"{trace_root_dir}/model_parallel_embedding/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"):
+                commands_generate_traces.append(["python3", "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--embedding", "--only-trace", "--num-channels", str(args.num_channels), "--num-banks", str(args.num_banks), "--FC-devices", str(FC_devices), "--model-parallel", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", f"{trace_root_dir}/model_parallel_embedding/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"])
     else:
-        if not os.path.exists(f"../trace/{args.num_channels}_channels_per_device/pipeline_parallel_embedding/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"):
-            commands_generate_traces.append(["python3", "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--embedding", "--only-trace", "--num-channels", str(args.num_channels), "--channels-per-block", str(channels_per_block), "--pipeline-parallel", "--multi-tb-per-device", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", f"../trace/{args.num_channels}_channels_per_device/pipeline_parallel_embedding/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"])
+        if missing_or_empty(f"{trace_root_dir}/pipeline_parallel_embedding/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"):
+            commands_generate_traces.append(["python3", "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--embedding", "--only-trace", "--num-channels", str(args.num_channels), "--num-banks", str(args.num_banks), "--channels-per-block", str(channels_per_block), "--pipeline-parallel", "--multi-tb-per-device", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", f"{trace_root_dir}/pipeline_parallel_embedding/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"])
 
     for seqlen in seqlen_list:
         if args.model_parallel:          
             for FC_devices in FC_devices_list:
-                if not os.path.exists(f"../trace/{args.num_channels}_channels_per_device/model_parallel/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"):
-                    commands_generate_traces.append(["python3", "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--only-trace", "--num-channels", str(args.num_channels), "--FC-devices", str(FC_devices), "--model-parallel", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", f"../trace/{args.num_channels}_channels_per_device/model_parallel/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"])
+                if missing_or_empty(f"{trace_root_dir}/model_parallel/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"):
+                    commands_generate_traces.append(["python3", "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--only-trace", "--num-channels", str(args.num_channels), "--num-banks", str(args.num_banks), "--FC-devices", str(FC_devices), "--model-parallel", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", f"{trace_root_dir}/model_parallel/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"])
                     if args.inter_device_attention:
                         commands_generate_traces[-1].append("--inter-device-attention")
-                if not os.path.exists(f"../trace/{args.num_channels}_channels_per_device/model_parallel_FC/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"):
-                    commands_generate_traces.append(["python3", "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--only-FC", "--only-trace", "--num-channels", str(args.num_channels), "--FC-devices", str(FC_devices), "--model-parallel", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", f"../trace/{args.num_channels}_channels_per_device/model_parallel_FC/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"])
+                if missing_or_empty(f"{trace_root_dir}/model_parallel_FC/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"):
+                    commands_generate_traces.append(["python3", "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--only-FC", "--only-trace", "--num-channels", str(args.num_channels), "--num-banks", str(args.num_banks), "--FC-devices", str(FC_devices), "--model-parallel", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", f"{trace_root_dir}/model_parallel_FC/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"])
         else:
             if channels_per_block < minimal_channel_per_block[args.model]:
                 raise ValueError(f"Channels per block {channels_per_block} is less than minimal channel per block {minimal_channel_per_block[args.model]}")
-            if not os.path.exists(f"../trace/{args.num_channels}_channels_per_device/pipeline_parallel/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"):
-                commands_generate_traces.append(["python3", "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--only-trace", "--num-channels", str(args.num_channels), "--channels-per-block", str(channels_per_block), "--pipeline-parallel", "--multi-tb-per-device", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", f"../trace/{args.num_channels}_channels_per_device/pipeline_parallel/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"])
+            if missing_or_empty(f"{trace_root_dir}/pipeline_parallel/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"):
+                commands_generate_traces.append(["python3", "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--only-trace", "--num-channels", str(args.num_channels), "--num-banks", str(args.num_banks), "--channels-per-block", str(channels_per_block), "--pipeline-parallel", "--multi-tb-per-device", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", f"{trace_root_dir}/pipeline_parallel/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"])
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.generate_trace_max_workers) as executor:
-        futures = [executor.submit(subprocess.run, cmd) for cmd in commands_generate_traces]
+        futures = [executor.submit(run_checked_command, cmd) for cmd in commands_generate_traces]
         for future in concurrent.futures.as_completed(futures):
             future.result()
 
@@ -95,33 +130,41 @@ def run_command(command, log_file):
     result = subprocess.run(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     filtered_output = "\n".join(line for line in result.stdout.splitlines() if not line.startswith('['))
     with open(log_file, "w") as log:
-        log.write(filtered_output)
-
-def detect_emtpy_file(file):
-    return os.stat(file).st_size == 0
+        if result.returncode == 0:
+            log.write(filtered_output)
+        else:
+            log.write(result.stdout)
+            log.write(result.stderr)
+    if result.returncode != 0:
+        raise RuntimeError(f"Command failed with exit code {result.returncode}: {command}\n{result.stdout}\n{result.stderr}")
 
 def simulate_trace(args, seqlen_list):
     commands_simulate_traces = []
 
-	# ../aim_simulator/build/ramulator2 -f ../aim_simulator/test/example.yaml -t ../trace/32_channels_per_device/pipeline_parallel/Llama2-7B/trace_8_channels_per_block_seqlen_1.txt 2>&1 | grep '^[^\[]' &> ../trace/32_channels_per_device/pipeline_parallel/Llama2-7B/trace_8_channels_per_block_seqlen_1.txt.log
+	# ../aim_simulator/build/ramulator2 -f ../aim_simulator/test/example.yaml -t ../trace/32_channels_8_banks_per_device/pipeline_parallel/Llama2-7B/trace_8_channels_per_block_seqlen_1.txt 2>&1 | grep '^[^\[]' &> ../trace/32_channels_8_banks_per_device/pipeline_parallel/Llama2-7B/trace_8_channels_per_block_seqlen_1.txt.log
 
     blocks_per_device = (TransformerBlock_number[args.model] - 1) // args.num_devices + 1
     channels_per_block = args.num_channels // blocks_per_device
     FC_devices_list = factorize(args.num_devices)
+    trace_root_dir = trace_root(args)
 
     # Embedding
     seqlen = args.prefill + args.decoding
     if args.model_parallel:
         for FC_devices in FC_devices_list:
-            log_file = f"../trace/{args.num_channels}_channels_per_device/model_parallel_embedding/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log"
-            if not os.path.exists(log_file) or detect_emtpy_file(log_file):
-                trace_file = f"../trace/{args.num_channels}_channels_per_device/model_parallel_embedding/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"
+            log_file = f"{trace_root_dir}/model_parallel_embedding/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log"
+            trace_file = f"{trace_root_dir}/model_parallel_embedding/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"
+            if missing_or_empty(log_file):
+                if missing_or_empty(trace_file):
+                    raise FileNotFoundError(f"Trace file is missing or empty: {trace_file}. Re-run with --generate_trace.")
                 command = f"../aim_simulator/build/ramulator2 -f ../aim_simulator/test/example.yaml -t {trace_file}"
                 commands_simulate_traces.append((command, log_file))
     else:
-        log_file = f"../trace/{args.num_channels}_channels_per_device/pipeline_parallel_embedding/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt.log"
-        if not os.path.exists(log_file) or detect_emtpy_file(log_file):
-            trace_file = f"../trace/{args.num_channels}_channels_per_device/pipeline_parallel_embedding/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"
+        log_file = f"{trace_root_dir}/pipeline_parallel_embedding/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt.log"
+        trace_file = f"{trace_root_dir}/pipeline_parallel_embedding/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"
+        if missing_or_empty(log_file):
+            if missing_or_empty(trace_file):
+                raise FileNotFoundError(f"Trace file is missing or empty: {trace_file}. Re-run with --generate_trace.")
             command = f"../aim_simulator/build/ramulator2 -f ../aim_simulator/test/example.yaml -t {trace_file}"
             commands_simulate_traces.append((command, log_file))
 
@@ -129,16 +172,20 @@ def simulate_trace(args, seqlen_list):
         if args.model_parallel:
             for FC_devices in FC_devices_list:
                 for mode in ["model_parallel", "model_parallel_FC"]:
-                    log_file = f"../trace/{args.num_channels}_channels_per_device/{mode}/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log"
-                    if not os.path.exists(f"../trace/{args.num_channels}_channels_per_device/{mode}/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log") or detect_emtpy_file(f"../trace/{args.num_channels}_channels_per_device/{mode}/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log"):
-                        trace_file = f"../trace/{args.num_channels}_channels_per_device/{mode}/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"
+                    log_file = f"{trace_root_dir}/{mode}/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log"
+                    trace_file = f"{trace_root_dir}/{mode}/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"
+                    if missing_or_empty(log_file):
+                        if missing_or_empty(trace_file):
+                            raise FileNotFoundError(f"Trace file is missing or empty: {trace_file}. Re-run with --generate_trace.")
                         command = f"../aim_simulator/build/ramulator2 -f ../aim_simulator/test/example.yaml -t {trace_file}"
                         commands_simulate_traces.append((command, log_file))
         else:
             for mode in ["pipeline_parallel"]:
-                log_file = f"../trace/{args.num_channels}_channels_per_device/{mode}/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt.log"
-                if not os.path.exists(log_file) or detect_emtpy_file(log_file):
-                    trace_file = f"../trace/{args.num_channels}_channels_per_device/{mode}/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"
+                log_file = f"{trace_root_dir}/{mode}/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt.log"
+                trace_file = f"{trace_root_dir}/{mode}/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"
+                if missing_or_empty(log_file):
+                    if missing_or_empty(trace_file):
+                        raise FileNotFoundError(f"Trace file is missing or empty: {trace_file}. Re-run with --generate_trace.")
                     command = f"../aim_simulator/build/ramulator2 -f ../aim_simulator/test/example.yaml -t {trace_file}"
                     commands_simulate_traces.append((command, log_file))
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.run_simulation_max_workers) as executor:
@@ -149,8 +196,9 @@ def simulate_trace(args, seqlen_list):
 def process_results(args):
     print("Processing results...")
     mode_list = model_parallel_mode_list if args.model_parallel else pipeline_parallel_mode_list
+    trace_root_dir = trace_root(args)
     for mode in mode_list:
-        compile_dir = f"../trace/{args.num_channels}_channels_per_device/{mode}/{args.model}/"
+        compile_dir = f"{trace_root_dir}/{mode}/{args.model}/"
         subprocess.run(["cp", "../trace/compile.sh", compile_dir])
         subprocess.run(["cp", "../trace/compile.py", compile_dir])
 
@@ -184,10 +232,13 @@ def calculate_acc_latency(args, seqlen):
 
 def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per_device, blocks_per_device, embedding_latency, utilized_devices, pp, tp):
 
+    trace_root_dir = trace_root(args)
     if args.model_parallel:
-        path = f"../trace/{args.num_channels}_channels_per_device/model_parallel/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log"
+        path = f"{trace_root_dir}/model_parallel/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log"
     else:
-        path = f"../trace/{args.num_channels}_channels_per_device/pipeline_parallel/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt.log"
+        path = f"{trace_root_dir}/pipeline_parallel/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt.log"
+    if missing_or_empty(path):
+        raise FileNotFoundError(f"Simulation log is missing or empty: {path}. Re-run --generate_trace --simulate_trace before --update_csv.")
     stats = command_processor(path)
     pim_latency = stats["latency"]
 
@@ -212,7 +263,9 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
     energy_main, latency_main = power_calculator(stats, PCIE, n_heads[args.model], embedding_size[args.model], seqlen, gqa_factor[args.model])
     if args.model_parallel:
         pipeline_stages = args.num_devices // FC_devices
-        FC_path = f"../trace/{args.num_channels}_channels_per_device/model_parallel_FC/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log"
+        FC_path = f"{trace_root_dir}/model_parallel_FC/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log"
+        if missing_or_empty(FC_path):
+            raise FileNotFoundError(f"Simulation log is missing or empty: {FC_path}. Re-run --generate_trace --simulate_trace before --update_csv.")
         stats_FC = command_processor(FC_path)
         energy_FC, latency_FC = power_calculator(stats_FC, PCIE, n_heads[args.model], embedding_size[args.model], seqlen, gqa_factor[args.model])
         for comp in energy_main.keys():
@@ -236,6 +289,7 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
         'Pipeline parallelism': pp,
         'Tensor parallelism': tp,
         'Channels per device': args.num_channels,
+        'Banks per device': args.num_banks,
         'Channels per block': channels_per_block,
         'Sequence length': seqlen,
         'PIM latency': pim_latency,
@@ -256,11 +310,12 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
 def update_csv(args, seqlen_list):
 
     print("Updating simulation results to CSV file...")
+    trace_root_dir = trace_root(args)
 
     if os.path.exists(args.simulation_result_path):
         results_df = pd.read_csv(args.simulation_result_path)
     else:
-        columns = ['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Channels per device', 'Channels per block', 'Sequence length', 'PIM latency', 'CXL latency', 'Acc latency', 'TransformerBlock latency', 'Embedding latency', 'Token latency (ms)', 'Throughput (tokens/s)', 'Token energy (mJ)', 'Total power (W)', 'Device utilization']
+        columns = ['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Channels per device', 'Banks per device', 'Channels per block', 'Sequence length', 'PIM latency', 'CXL latency', 'Acc latency', 'TransformerBlock latency', 'Embedding latency', 'Token latency (ms)', 'Throughput (tokens/s)', 'Token energy (mJ)', 'Total power (W)', 'Device utilization']
         results_df = pd.DataFrame(columns=columns)
 
     embedding_latency = {'pipeline_parallel': {}, 'model_parallel': {}}
@@ -268,15 +323,22 @@ def update_csv(args, seqlen_list):
     if args.model_parallel:
         FC_devices_list = factorize(args.num_devices)
         for FC_devices in FC_devices_list:
-            embedding_compile_dir = f"../trace/{args.num_channels}_channels_per_device/model_parallel_embedding/{args.model}/"
+            embedding_compile_dir = f"{trace_root_dir}/model_parallel_embedding/{args.model}/"
             with open(f"{embedding_compile_dir}/compiled_results.txt", "r") as compiled_results_file:
                 lines = compiled_results_file.readlines()
                 for line in lines:
                     filename, latency = line.split()[0], line.split()[1]
                     FC_devices = int(filename.split('_')[1])
                     embedding_latency["model_parallel"][FC_devices] = float(latency)
+        missing_FC_devices = [FC_devices for FC_devices in FC_devices_list if FC_devices not in embedding_latency["model_parallel"]]
+        if missing_FC_devices:
+            raise ValueError(
+                f"Missing model-parallel embedding latency for FC_devices={missing_FC_devices} in "
+                f"{trace_root_dir}/model_parallel_embedding/{args.model}/compiled_results.txt. "
+                "Check for missing or empty trace/log files and re-run --generate_trace --simulate_trace --process_results."
+            )
     else:
-        embedding_compile_dir = f"../trace/{args.num_channels}_channels_per_device/pipeline_parallel_embedding/{args.model}/"
+        embedding_compile_dir = f"{trace_root_dir}/pipeline_parallel_embedding/{args.model}/"
         with open(f"{embedding_compile_dir}/compiled_results.txt", "r") as compiled_results_file:
             lines = compiled_results_file.readlines()
             for line in lines:
@@ -310,8 +372,8 @@ def update_csv(args, seqlen_list):
             results_df = pd.concat([results_df, new_result_df], ignore_index=True)
 
     # Save the DataFrame to a CSV file
-    results_df = results_df.drop_duplicates(subset=['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Channels per device', 'Channels per block', 'Sequence length'])
-    results_df = results_df.sort_values(by=['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Channels per device', 'Channels per block', 'Sequence length'])
+    results_df = results_df.drop_duplicates(subset=['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Channels per device', 'Banks per device', 'Channels per block', 'Sequence length'])
+    results_df = results_df.sort_values(by=['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Channels per device', 'Banks per device', 'Channels per block', 'Sequence length'])
     results_df.to_csv(args.simulation_result_path, index=False)
     # print(results_df)
 
@@ -323,11 +385,13 @@ def process_throughputs(args):
         df_simulation = pd.read_csv(args.simulation_result_path)
     else:
         raise ValueError(f"File {args.simulation_result_path} does not exist. Generate simulation results first.")
+    if 'Banks per device' in df_simulation.columns:
+        df_simulation = df_simulation[df_simulation['Banks per device'] == args.num_banks]
     
     if os.path.exists(args.processed_result_path):
         results_df = pd.read_csv(args.processed_result_path)
     else:
-        columns = ['Model', 'Device number', 'Seqlen', 'Pipeline parallelism', 'Tensor parallelism', 'Phase', 'Total Latency (s)', 'Throughput (tokens/s)', 'Energy per Token (mJ)', 'Total power (W)']
+        columns = ['Model', 'Device number', 'Banks per device', 'Seqlen', 'Pipeline parallelism', 'Tensor parallelism', 'Phase', 'Total Latency (s)', 'Throughput (tokens/s)', 'Energy per Token (mJ)', 'Total power (W)']
         results_df = pd.DataFrame(columns=columns)
 
 
@@ -360,6 +424,7 @@ def process_throughputs(args):
             new_result = {
                 'Model': args.model,
                 'Device number': args.num_devices,
+                'Banks per device': args.num_banks,
                 'Seqlen': args.prefill + args.decoding,
                 'Pipeline parallelism': pp,
                 'Tensor parallelism': tp,
@@ -394,6 +459,7 @@ def process_throughputs(args):
         new_result = {
             'Model': args.model,
             'Device number': args.num_devices,
+            'Banks per device': args.num_banks,
             'Seqlen': args.prefill + args.decoding,
             'Pipeline parallelism': TransformerBlock_number[args.model],
             'Tensor parallelism': 1,
@@ -404,10 +470,10 @@ def process_throughputs(args):
             'Total power (W)': total_power
         }
         new_result_df = pd.DataFrame([new_result])
-        results_df = pd.concat([results_df, new_result_df], ignore_index=True)
+    results_df = pd.concat([results_df, new_result_df], ignore_index=True)
     
     results_df = results_df.drop_duplicates()
-    results_df = results_df.sort_values(by=['Model', 'Device number', 'Seqlen', 'Pipeline parallelism', 'Tensor parallelism', 'Phase'])
+    results_df = results_df.sort_values(by=['Model', 'Device number', 'Banks per device', 'Seqlen', 'Pipeline parallelism', 'Tensor parallelism', 'Phase'])
     results_df.to_csv(args.processed_result_path, index=False)
 
 
@@ -422,7 +488,7 @@ if __name__ == "__main__":
         seqlen_list = [i * args.seqlen_gap for i in range(1, (args.prefill + args.decoding) // args.seqlen_gap + 1)]
         
     for mode in pipeline_parallel_mode_list + model_parallel_mode_list:
-        subprocess.run(["mkdir", "-p", f"../trace/{args.num_channels}_channels_per_device/{mode}/{args.model}"])
+        subprocess.run(["mkdir", "-p", f"{trace_root(args)}/{mode}/{args.model}"])
 
     if args.generate_trace:
         generate_trace(args, seqlen_list)
