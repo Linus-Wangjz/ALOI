@@ -1,0 +1,37 @@
+impl: LPDDR4
+timing:
+  rate: 3200
+  nBL: 4
+  nCL: 20
+  nRCD: 29
+  nRCDRDMAC: 49
+  nRCDEWMUL: 25
+  nRCDRDAF: 79
+  nRCDRDCP: 59
+  nRCDWRCP: 49
+  nRPab: 34
+  nRPpb: 29
+  nRAS: 68
+  nRC: 101
+  nWR: 29
+  nRTP: 12
+  nCWL: 11
+  nCCD: 6
+  nRRD: 16
+  nWTRS: 16
+  nWTRL: 16
+  nFAW: 64
+  nPPD: 2
+  nRFCab: 288
+  nRFCpb: 144
+  nREFI: 6250
+  nPBR2PBR: 144
+  nPBR2ACT: 13
+  nCS: 2
+  nCLREG: 0
+  nCLGB: 1
+  nCWLREG: 1
+  nCWLGB: 1
+  nWPRE: 1
+  nMODCH: 32
+  tCK_ps: 625

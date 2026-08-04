@@ -1,0 +1,38 @@
+Frontend:
+  impl: AiMTrace
+  clock_ratio: 1
+  
+  Translation:
+    impl: NoTranslation
+    max_addr: 2147483648
+              
+
+MemorySystem:
+  impl: AiMDRAM
+  clock_ratio: 1
+
+  DRAM:
+    impl: LPDDR4
+    org:
+      preset: LPDDR4_AiM_org
+    timing:
+      preset: LPDDR4_AiM_timing
+      nCCD: 2
+
+  Controller:
+    impl: AiM
+    clock_ratio: 1
+    Scheduler:
+      impl: FRFCFS
+    RefreshManager:
+      impl: AllBank
+    plugins:
+      - ControllerPlugin:
+          impl: DRAMTimingExporter
+          path: /home/linuswang/Documents/CENT/cent_simulation/output/LPDDR4X/ramulator_long_context_midpoint_nCCD2/model_parallel_FC/Llama2-7B/trace_1_FC_devices_seqlen_2304.txt.timing.yaml
+
+  AddrMapper:
+    impl: RoBaRaCoCh
+
+
+

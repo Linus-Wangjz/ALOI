@@ -50,17 +50,19 @@ bash remove_old_results.sh
 
 ### Run Simulation
 
-Perform the end-to-end trace generation, performance simulation, and power modeling:
+Run decode-only trace generation, Ramulator simulation, and Cellar-based energy
+modeling for GDDR6 and LPDDR4X nCCD=2/6:
 
 ```bash
 cd cent_simulation
-# bash simulation.sh <set threads based on your platform> <sequence length gap>
-bash simulation.sh 8 128
-bash process_results.sh
+python3 scripts/run_cent_memory_cases.py --trace-workers 8 --run-workers 8
 cd ..
 ```
 
-**Note:** Setting `sequence length gap` to 1 will start full simulation, generating token by token from 1 to 4096. Setting `sequence length gap` to 128 will generate tokens at index of 128, 256, ..., 4096. The final results are averaged on various sequence lengths. We show results using `sequence length gap = 1`, but full simulation takes long time and ~100GB disk space. For example, using 8 threads on a desktop takes ~8GB memory and ~24 hours for full simulation, and using 96 threads on a server takes ~64GB memory and ~12 hours for full simulation. For a quick verification, use `sequence length gap = 128`, which only takes a few hours and has minor difference in results.
+The default matrix is Llama2-7B/Llama2-70B at 4K, 32K, and 128K context. Use
+`--models`, `--contexts`, and `--cases` to select a subset. The generated CSVs
+are under `cent_simulation/output`; functional traces are under
+`cent_simulation/trace`.
 
 Generate all figures using the following script or generate them one by one using scripts in sections below:
 

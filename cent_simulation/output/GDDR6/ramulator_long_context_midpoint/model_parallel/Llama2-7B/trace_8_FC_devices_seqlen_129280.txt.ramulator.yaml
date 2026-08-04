@@ -1,0 +1,34 @@
+Frontend:
+  impl: AiMTrace
+  clock_ratio: 1
+  
+  Translation:
+    impl: NoTranslation
+    max_addr: 2147483648
+              
+
+MemorySystem:
+  impl: AiMDRAM
+  clock_ratio: 1
+
+  DRAM:
+    impl: GDDR6
+    org:
+      preset: GDDR6_AiM_org
+    timing:
+      preset: GDDR6_AiM_timing 
+
+  Controller:
+    impl: AiM
+    clock_ratio: 1
+    Scheduler:
+      impl: FRFCFS
+    RefreshManager:
+      impl: AllBank
+    plugins:
+      - ControllerPlugin:
+          impl: DRAMTimingExporter
+          path: /home/linuswang/Documents/CENT/cent_simulation/output/GDDR6/ramulator_long_context_midpoint/model_parallel/Llama2-7B/trace_8_FC_devices_seqlen_129280.txt.timing.yaml
+
+  AddrMapper:
+    impl: RoBaRaCoCh
