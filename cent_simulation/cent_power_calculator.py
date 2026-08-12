@@ -29,6 +29,7 @@ sys.path.insert(0, str(_AIM_SIMULATOR_SCRIPTS))
 CELLAR_POWER_CALCULATOR = importlib.import_module("cellar_power_calculator")
 
 DRAM_ENERGY_MODELS = CELLAR_POWER_CALCULATOR.DRAM_ENERGY_MODELS
+DEVICE_ROLES = ("main", "inter_device_helper", "fc_helper", "kv_head_helper")
 DRAM_POWER = CELLAR_POWER_CALCULATOR.dram_power_for_impl("GDDR6")
 ACCEL_POWER = CELLAR_POWER_CALCULATOR.ACCEL_POWER
 SRAM_POWER = CELLAR_POWER_CALCULATOR.SRAM_POWER
@@ -90,6 +91,166 @@ def command_processor(stat_path, timing_path=None):
     return stat
 
 
+def _analytical_dynamic_energy_by_operation(
+    stat,
+    Head,
+    HiddenDim,
+    Tokens,
+    GQA,
+    *,
+    rmsnorm_hidden_dim=None,
+):
+    """Reproduce Cellar's non-trace accelerator terms, split by operation.
+
+    Cellar historically adds RMSNorm, softmax, and rotary-embedding energy to
+    every trace.  CENT's helper traces intentionally execute only a subset of
+    those operations, so the adapter needs the same formulas split by phase in
+    order to remove only the operations that are absent from a helper role.
+    Returned energies are in mJ, matching ``calculate_energy_and_latency``.
+    """
+
+    tck_ps = stat["tCK_ps"]
+    gqa_factor = 1.0 + 1.0 / GQA
+    rms_hidden = HiddenDim if rmsnorm_hidden_dim is None else rmsnorm_hidden_dim
+    scale = tck_ps / 1e12
+    sb = SRAM_POWER["SB"]
+    ib_read = SRAM_POWER["IB"]["RD"]
+
+    rmsnorm = {
+        "SB_DYN": 2.0
+        * (rms_hidden / 16.0 / 16.0 + 2.0)
+        * (2.0 * sb["RD"] + sb["WR"])
+        * scale,
+        "IB_DYN": 2.0 * (rms_hidden / 16.0 / 16.0 + 2.0) * ib_read * scale,
+        "RV_DYN": 2.0 * RV_RMSNorm_CYCLE * ACCEL_POWER["RV"] * scale,
+        "RED_DYN": 2.0 * ACCEL_POWER["RED"]["DYN"] * scale,
+        "EXP_DYN": 0.0,
+        "VEC_DYN": 2.0 * rms_hidden / 16.0 / 16.0 * ACCEL_POWER["VEC"]["DYN"] * scale,
+    }
+    softmax = {
+        "SB_DYN": (
+            (Tokens * Head / 16.0 * 3.0 + Head * 2.0) * sb["RD"]
+            + (Tokens * Head / 16.0 * 2.0 + Head * 2.0) * sb["WR"]
+        )
+        * scale,
+        "IB_DYN": (Tokens * Head / 16.0 * 2.0 + Head * 2.0) * ib_read * scale,
+        "RV_DYN": Head * RV_SFT_CYCLE_SINGLE * ACCEL_POWER["RV"] * scale,
+        "RED_DYN": Head * ACCEL_POWER["RED"]["DYN"] * scale,
+        "EXP_DYN": Tokens * Head / 16.0 * ACCEL_POWER["EXP"]["DYN"] * scale,
+        "VEC_DYN": Tokens * Head / 16.0 * ACCEL_POWER["VEC"]["DYN"] * scale,
+    }
+    rotary = {
+        "SB_DYN": gqa_factor
+        * HiddenDim
+        / 16.0
+        * (sb["RD"] + 2.0 * sb["WR"])
+        * scale,
+        "IB_DYN": gqa_factor * HiddenDim * ib_read * scale,
+        "RV_DYN": gqa_factor
+        * HiddenDim
+        * RV_ROTEmbed_CYCLE
+        * ACCEL_POWER["RV"]
+        * scale,
+        "RED_DYN": 0.0,
+        "EXP_DYN": 0.0,
+        "VEC_DYN": 0.0,
+    }
+    return {
+        "RMSNorm": rmsnorm,
+        "Softmax": softmax,
+        "RotEmbed": rotary,
+    }
+
+
+def kv_head_tp_pnm_dynamic_energy(
+    stat, *, repack_elements, reduction_adds, activation_elements=0
+):
+    """Analytical energy for device-local TP repacking, reduction, and SiLU.
+
+    These device-local PNM operations intentionally do not appear in the
+    Ramulator trace.  Repacking moves BF16 K/V projection outputs through the
+    shared buffer; reduction combines the per-bank SV partials with the
+    16-lane vector unit.  ``activation_elements`` accounts for the fused
+    W1/W3 SiLU and multiply: one EXP-class operation and two vector operations
+    per 16 elements.  Returned terms use Cellar's mJ convention and can be
+    added directly to one rank's ``power_calculator`` result.
+    """
+
+    if repack_elements < 0 or reduction_adds < 0 or activation_elements < 0:
+        raise ValueError("PNM work counts cannot be negative")
+    scale = stat["tCK_ps"] / 1e12
+    repack_groups = math.ceil(repack_elements / 16.0)
+    reduction_groups = math.ceil(reduction_adds / 16.0)
+    activation_groups = math.ceil(activation_elements / 16.0)
+    sb = SRAM_POWER["SB"]
+    return {
+        "SB_DYN": (
+            repack_groups * (sb["RD"] + sb["WR"])
+            + reduction_groups * (2.0 * sb["RD"] + sb["WR"])
+            + activation_groups * (3.0 * sb["RD"] + sb["WR"])
+        ) * scale,
+        "IB_DYN": (
+            repack_groups + reduction_groups + activation_groups
+        ) * SRAM_POWER["IB"]["RD"] * scale,
+        "EXP_DYN": (
+            activation_groups * ACCEL_POWER["EXP"]["DYN"] * scale
+        ),
+        "VEC_DYN": (
+            (reduction_groups + 2.0 * activation_groups)
+            * ACCEL_POWER["VEC"]["DYN"]
+            * scale
+        ),
+    }
+
+
+def add_energy_terms(energy, additions):
+    """Return a copy of an energy breakdown with additive component terms."""
+
+    result = dict(energy)
+    for component, value in additions.items():
+        if component not in result:
+            raise KeyError(f"Unknown Cellar energy component: {component}")
+        result[component] += value
+    return result
+
+
+def _filter_energy_for_device_role(energy, latency, stat, Head, HiddenDim, Tokens, GQA, device_role):
+    if device_role == "main":
+        return energy, latency
+
+    excluded_operations = {
+        # Inter-device helpers rotate their local Q/K shard, but normalization
+        # and the current centralized softmax remain on the main device.
+        "inter_device_helper": ("RMSNorm", "Softmax"),
+        # The paper-compatible FC-only helper performs none of these phases.
+        "fc_helper": ("RMSNorm", "Softmax", "RotEmbed"),
+        # Standard head-TP helpers execute local RoPE, Softmax, and activation;
+        # the main alone performs the two global residual/RMSNorm phases.
+        "kv_head_helper": ("RMSNorm",),
+    }[device_role]
+    filtered_energy = dict(energy)
+    filtered_latency = dict(latency)
+    contributions = _analytical_dynamic_energy_by_operation(stat, Head, HiddenDim, Tokens, GQA)
+    latency_keys = {
+        "RMSNorm": "RMSNorm_latency",
+        "Softmax": "Softmax_latency",
+        "RotEmbed": "RotEmbed_latency",
+    }
+    for operation in excluded_operations:
+        for component, value in contributions[operation].items():
+            filtered_energy[component] -= value
+            if filtered_energy[component] < 0.0:
+                tolerance = max(1e-15, abs(value) * 1e-9)
+                if filtered_energy[component] < -tolerance:
+                    raise ValueError(
+                        f"Filtering {operation} for {device_role} made {component} negative: "
+                        f"{filtered_energy[component]} mJ"
+                    )
+                filtered_energy[component] = 0.0
+        filtered_latency[latency_keys[operation]] = 0.0
+    return filtered_energy, filtered_latency
+
+
 def power_calculator(
     stat,
     PCIE_bits,
@@ -100,14 +261,18 @@ def power_calculator(
     dram_power_impl=None,
     dram_energy_model="legacy",
     command_trace_prefix=None,
+    device_role="main",
+    rmsnorm_hidden_dim=None,
 ):
     """Call Cellar's canonical legacy or TraceRecorder-based energy model."""
     if dram_energy_model not in DRAM_ENERGY_MODELS:
         raise ValueError(f"Unknown DRAM energy model '{dram_energy_model}'")
+    if device_role not in DEVICE_ROLES:
+        raise ValueError(f"Unknown device role '{device_role}'. Expected one of: {', '.join(DEVICE_ROLES)}")
     set_channel_count(CH_PER_DV)
     if command_trace_prefix is None:
         command_trace_prefix = stat.get("command_trace_prefix")
-    return CELLAR_POWER_CALCULATOR.calculate_energy_and_latency(
+    energy, latency = CELLAR_POWER_CALCULATOR.calculate_energy_and_latency(
         stat,
         PCIE_bits,
         Head,
@@ -117,6 +282,34 @@ def power_calculator(
         dram_power_impl=dram_power_impl,
         dram_energy_model=dram_energy_model,
         command_trace_prefix=command_trace_prefix,
+    )
+    if rmsnorm_hidden_dim is not None and rmsnorm_hidden_dim != HiddenDim:
+        old_rms = _analytical_dynamic_energy_by_operation(
+            stat, Head, HiddenDim, Tokens, GQA
+        )["RMSNorm"]
+        new_rms = _analytical_dynamic_energy_by_operation(
+            stat,
+            Head,
+            HiddenDim,
+            Tokens,
+            GQA,
+            rmsnorm_hidden_dim=rmsnorm_hidden_dim,
+        )["RMSNorm"]
+        for component in old_rms:
+            energy[component] += new_rms[component] - old_rms[component]
+        tck_ps = stat["tCK_ps"]
+        rms_cycles = rmsnorm_hidden_dim / 16.0 / 16.0 / CH_PER_DV * ACCEL_CYCLE["VEC"]
+        rms_cycles += SB_RD_CYCLE + SB_WR_CYCLE + 1.0 + RV_RMSNorm_CYCLE
+        latency["RMSNorm_latency"] = 2.0 * rms_cycles * tck_ps / GIGA
+    return _filter_energy_for_device_role(
+        energy,
+        latency,
+        stat,
+        Head,
+        HiddenDim,
+        Tokens,
+        GQA,
+        device_role,
     )
 
 

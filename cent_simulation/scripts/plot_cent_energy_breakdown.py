@@ -18,7 +18,7 @@ OUTPUT_ROOT = CENT_SIM / "output"
 sys.path.insert(0, str(CENT_SIM))
 
 import cent_power_calculator as cent  # noqa: E402
-from cent_capacity import select_capacity_constrained_best  # noqa: E402
+from scripts.cent_capacity import select_capacity_constrained_best  # noqa: E402
 
 n_heads = {"Llama2-7B": 32, "Llama2-70B": 64}
 gqa_factor = {"Llama2-7B": 1, "Llama2-70B": 8}
@@ -208,7 +208,9 @@ def row_mode(row: dict[str, str], log_root: Path) -> str:
 
     model_log = log_root / f"model_parallel/{model}/trace_{tp}_FC_devices_seqlen_{seqlen}.txt.log"
     pipeline_log = log_root / f"pipeline_parallel/{model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt.log"
-    if tp > 1 and model_log.exists():
+    device_number = row_int(row, "Device number")
+    pp = row_int(row, "Pipeline parallelism")
+    if pp * tp == device_number and model_log.exists():
         return "model_parallel"
     if pipeline_log.exists():
         return "pipeline_parallel"
@@ -237,6 +239,20 @@ def select_row(
         subset = [row for row in subset if row.get("DRAM energy model", "legacy") == dram_energy_model]
     if not subset:
         raise ValueError(f"no {dram_energy_model} simulation row for {model} seqlen={seqlen}")
+
+    expected_mapping = "inter_device" if shard_kv_cache_across_tp else "master"
+    explicit_mappings = {
+        row.get("Attention mapping", "")
+        for row in subset
+        if row.get("Attention mapping", "") in {"inter_device", "master"}
+    }
+    if explicit_mappings:
+        subset = [row for row in subset if row.get("Attention mapping") == expected_mapping]
+        if not subset:
+            raise ValueError(
+                f"no {expected_mapping} attention row for {model} seqlen={seqlen}; "
+                f"available mappings: {', '.join(sorted(explicit_mappings))}"
+            )
 
     if mode == "capacity_constrained":
         return select_capacity_constrained_best(
@@ -271,8 +287,15 @@ def trace_logs(row: dict[str, str], mode: str, log_root: Path) -> tuple[Path, Pa
 
     if selected_mode == "model_parallel":
         main = log_root / f"model_parallel/{model}/trace_{tp}_FC_devices_seqlen_{seqlen}.txt.log"
-        fc = log_root / f"model_parallel_FC/{model}/trace_{tp}_FC_devices_seqlen_{seqlen}.txt.log"
-        return main, fc, selected_mode
+        if tp == 1:
+            return main, None, selected_mode
+        helper_mode = (
+            "model_parallel_helper_attention"
+            if row.get("Attention mapping") == "inter_device"
+            else "model_parallel_FC"
+        )
+        helper = log_root / f"{helper_mode}/{model}/trace_{tp}_FC_devices_seqlen_{seqlen}.txt.log"
+        return main, helper, selected_mode
     if selected_mode == "pipeline_parallel":
         main = log_root / f"pipeline_parallel/{model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt.log"
         return main, None, selected_mode
@@ -296,7 +319,7 @@ def calculate_component_energy(
     ch_per_dv = row_int(row, "Channels per device")
     set_cent_channel_count(ch_per_dv)
 
-    main_log, fc_log, selected_mode = trace_logs(row, mode, log_root)
+    main_log, helper_log, selected_mode = trace_logs(row, mode, log_root)
     require_log(main_log)
     stat_main = cent.command_processor(str(main_log))
 
@@ -317,31 +340,39 @@ def calculate_component_energy(
     )
 
     if selected_mode == "model_parallel":
-        if fc_log is None:
-            raise ValueError("model_parallel mode requires an FC log")
-        require_log(fc_log)
-        stat_fc = cent.command_processor(str(fc_log))
-        energy_fc, _latency_fc = cent.power_calculator(
-            stat_fc,
-            pcie_bits,
-            n_heads[model],
-            embedding_size[model],
-            seqlen,
-            gqa_factor[model],
-            dram_power_impl=dram_power_impl,
-            dram_energy_model=dram_energy_model,
-            command_trace_prefix=cent.command_trace_prefix_for_log(fc_log),
-        )
-        fc_devices = row_int(row, "Tensor parallelism")
-        energy_token = {
-            comp: (energy_main[comp] + energy_fc[comp] * (fc_devices - 1)) * TransformerBlock_number[model]
-            for comp in energy_main
-        }
+        tp = row_int(row, "Tensor parallelism")
+        if tp == 1:
+            energy_token = {
+                comp: energy_main[comp] * TransformerBlock_number[model]
+                for comp in energy_main
+            }
+        else:
+            if helper_log is None:
+                raise ValueError("TP>1 model_parallel mode requires a helper log")
+            require_log(helper_log)
+            stat_helper = cent.command_processor(str(helper_log))
+            inter_device = row.get("Attention mapping") == "inter_device"
+            energy_helper, _latency_helper = cent.power_calculator(
+                stat_helper,
+                pcie_bits,
+                n_heads[model],
+                embedding_size[model],
+                seqlen,
+                gqa_factor[model],
+                dram_power_impl=dram_power_impl,
+                dram_energy_model=dram_energy_model,
+                command_trace_prefix=cent.command_trace_prefix_for_log(helper_log),
+                device_role=("inter_device_helper" if inter_device else "fc_helper"),
+            )
+            energy_token = {
+                comp: (energy_main[comp] + energy_helper[comp] * (tp - 1)) * TransformerBlock_number[model]
+                for comp in energy_main
+            }
     else:
         utilized_devices = row_float(row, "Device utilization") * row_float(row, "Device number")
         energy_token = {comp: energy_main[comp] * utilized_devices for comp in energy_main}
 
-    return energy_token, stat_main, selected_mode, main_log, fc_log
+    return energy_token, stat_main, selected_mode, main_log, helper_log
 
 
 def append_row(
@@ -358,7 +389,7 @@ def append_row(
     stat: dict[str, float],
     groups: dict[str, list[str]],
     main_log: Path,
-    fc_log: Path | None,
+    helper_log: Path | None,
 ) -> None:
     component_energy = {
         component: sum(energy.get(source, 0.00) for source in sources)
@@ -410,7 +441,9 @@ def append_row(
         "average_provisioned_device_W": f"{total_w / device_count:.12g}",
         "average_active_device_W": f"{total_w / utilized_device_count:.12g}",
         "main_log": display_path(main_log),
-        "fc_log": "" if fc_log is None else display_path(fc_log),
+        "helper_log": "" if helper_log is None else display_path(helper_log),
+        # Retain the historical column for downstream CSV compatibility.
+        "fc_log": "" if helper_log is None else display_path(helper_log),
     }
     for component, value in component_energy.items():
         row[component] = f"{value:.12g}"
@@ -541,6 +574,7 @@ def write_csv(rows: list[dict[str, str]], csv_path: Path, groups: dict[str, list
         "average_active_device_W",
         "energy_delta_pct",
         "main_log",
+        "helper_log",
         "fc_log",
     ]
     csv_path.parent.mkdir(parents=True, exist_ok=True)

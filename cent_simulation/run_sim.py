@@ -6,8 +6,16 @@ import subprocess
 import concurrent.futures
 import sys
 from pathlib import Path
-from cxl_latency import llama_latency, gpt_latency, vector_latency
-from cent_power_calculator import DRAM_ENERGY_MODELS, ACCEL_CYCLE, power_calculator, command_processor, command_trace_prefix_for_log, set_channel_count, KILO, FREQ, SB_RD_CYCLE, SB_WR_CYCLE, RV_RMSNorm_CYCLE, RV_ROTEmbed_CYCLE, RV_SFT_CYCLE_PIPELINE
+from cxl_latency import (
+    gpt_latency,
+    kv_head_tp_latency,
+    kv_head_tp_pcie_bits,
+    llama_latency,
+    vector_latency,
+)
+from cent_power_calculator import DRAM_ENERGY_MODELS, ACCEL_CYCLE, add_energy_terms, kv_head_tp_pnm_dynamic_energy, power_calculator, command_processor, command_trace_prefix_for_log, set_channel_count, KILO, FREQ, SB_RD_CYCLE, SB_WR_CYCLE, RV_RMSNorm_CYCLE, RV_ROTEmbed_CYCLE, RV_SFT_CYCLE_PIPELINE
+from systolic_power import SYSTOLIC_PIM_POWER_SCALING
+from tp_mapping import KVHeadTPLayout, SystolicTPLayout, kv_head_tp_shape
 from utils import InOut_latency, n_heads, gqa_factor, embedding_size, ffn_size, TransformerBlock_number, minimal_channel_per_block, pipeline_parallel_mode_list, model_parallel_mode_list
 
 def get_args():
@@ -41,8 +49,37 @@ def get_args():
     parser.add_argument("--dram_energy_model", "--dram-energy-model", dest="dram_energy_model", choices=DRAM_ENERGY_MODELS, default="legacy", help="DRAM energy model: command-count legacy or TraceRecorder-based activity replay")
     parser.add_argument("--decode_only", "--decode-only", dest="decode_only", action="store_true", help="Skip embedding traces and report decode-only token latency/energy")
     parser.add_argument("--model_parallel", action="store_true", help="Apply model parallelism")
+    parser.add_argument("--systolic_pim", "--systolic-pim", dest="systolic_pim", action="store_true", help="Use the systolic PIM trace path")
+    parser.add_argument("--systolic_dim", "--systolic-dim", dest="systolic_dim", type=int, choices=sorted(SYSTOLIC_PIM_POWER_SCALING), default=1, help="Systolic array height; width is 16")
+    parser.add_argument("--batch_size", "--batch-size", dest="batch_size", type=int, default=1, help="Decode batch size; independent of the systolic array height")
+    parser.add_argument("--flash_attention", "--flash-attention", dest="flash_attention", action="store_true", help="Chunk systolic attention traces")
+    parser.add_argument("--flash_attention_block_size", "--flash-attention-block-size", dest="flash_attention_block_size", type=int, default=1024)
     parser.add_argument("--inter-device-attention", action="store_true")
+    parser.add_argument(
+        "--kv-head-tp",
+        action="store_true",
+        help="Use standard query/KV-head tensor parallelism with local attention",
+    )
+    parser.add_argument(
+        "--tp-values",
+        type=int,
+        nargs="+",
+        help=(
+            "Optional tensor-parallel degrees to trace/simulate. Values must divide "
+            "--num_devices. The default preserves the original all-factor sweep."
+        ),
+    )
     args = parser.parse_args()
+    if args.kv_head_tp and args.inter_device_attention:
+        parser.error("--kv-head-tp and --inter-device-attention are mutually exclusive")
+    if args.kv_head_tp and not args.model_parallel:
+        parser.error("--kv-head-tp requires --model_parallel")
+    if args.kv_head_tp and not args.decode_only:
+        parser.error("--kv-head-tp currently supports decode-only trace generation")
+    if args.flash_attention_block_size < 1:
+        parser.error("--flash_attention_block_size must be positive")
+    if args.batch_size < 1:
+        parser.error("--batch-size must be positive")
     set_channel_count(args.num_channels)
     if args.simulation_result_path is None:
         args.simulation_result_path = default_simulation_result_path(args)
@@ -61,23 +98,151 @@ def factorize(n):
     return sorted(factors)
 
 
+def adjust_systolic_energy(energy, args):
+    """Apply cent_dev's batch and systolic-array energy scaling."""
+    adjusted = dict(energy)
+    for component in [
+        "IB_DYN",
+        "SB_DYN",
+        "RV_DYN",
+        "RED_DYN",
+        "EXP_DYN",
+        "VEC_DYN",
+        "VEC_ADD_DYN",
+        "VEC_MUL_DYN",
+    ]:
+        if component in adjusted:
+            adjusted[component] *= args.batch_size
+    if args.systolic_pim and "PIM" in adjusted:
+        adjusted["PIM"] *= SYSTOLIC_PIM_POWER_SCALING[args.systolic_dim]
+    return adjusted
+
+
+def normalize_batch_group_energy(energy, batch_size):
+    """Return total energy for one traced group and per emitted token."""
+
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+    group_energy = sum(energy.values())
+    return group_energy, group_energy / batch_size
+
+
+INTER_DEVICE_HELPER_MODE = "model_parallel_helper_attention"
+KV_HEAD_MAIN_MODE = "model_parallel_kv_head_main"
+KV_HEAD_HELPER_MODE = "model_parallel_kv_head_helper"
+
+
+def model_parallel_tp_values(args):
+    values = factorize(args.num_devices) if args.tp_values is None else sorted(set(args.tp_values))
+    invalid = [value for value in values if value <= 0 or args.num_devices % value]
+    if invalid:
+        raise ValueError(
+            f"Every --tp-values entry must be positive and divide --num_devices={args.num_devices}: {invalid}"
+        )
+    if getattr(args, "kv_head_tp", False):
+        kv_heads = n_heads[args.model] // gqa_factor[args.model]
+        invalid = [
+            value
+            for value in values
+            if n_heads[args.model] % value
+            or kv_heads % value
+            or ffn_size[args.model] % value
+            or value > 8
+        ]
+        if invalid:
+            raise ValueError(
+                "KV-head TP values must be <=8 and evenly divide query heads, "
+                f"KV heads, and FFN dimension for {args.model}: {invalid}"
+            )
+    return values
+
+
+def model_parallel_main_mode(args):
+    return KV_HEAD_MAIN_MODE if getattr(args, "kv_head_tp", False) else "model_parallel"
+
+
+def model_parallel_helper_mode(args):
+    if getattr(args, "kv_head_tp", False):
+        return KV_HEAD_HELPER_MODE
+    return INTER_DEVICE_HELPER_MODE if args.inter_device_attention else "model_parallel_FC"
+
+
+def model_parallel_modes_for_tp(args, tp):
+    modes = [model_parallel_main_mode(args)]
+    if tp > 1 and not getattr(args, "kv_head_tp", False):
+        modes.append(model_parallel_helper_mode(args))
+    return modes
+
+
+def model_parallel_helper_trace_command(args, python, model_flag, tp, seqlen, max_seq_len, trace_file):
+    command = [
+        python, "function_sim.py", model_flag,
+        "--n_heads", str(n_heads[args.model]),
+        "--ffn_dim", str(ffn_size[args.model]),
+        "--only-trace",
+        "--num-channels", str(args.num_channels),
+        "--num-banks", str(args.num_banks),
+        "--max-seq-len", str(max_seq_len),
+        "--FC-devices", str(tp),
+        "--model-parallel",
+        "--seqlen", str(seqlen),
+        "--GEMV", "reuse-GB",
+        "--reuse-size", str(args.reuse_size),
+        "--trace-file", trace_file,
+    ]
+    if getattr(args, "kv_head_tp", False):
+        command.extend([
+            "--kv-head-tp",
+            "--tp-device-role", "helper",
+            "--trace-fc-kqvo",
+            "--trace-attention",
+            "--trace-softmax",
+            "--trace-fc-ffn",
+            "--trace-activation",
+        ])
+    elif args.inter_device_attention:
+        # Helpers execute their local FC and KV-attention shards. Norm,
+        # centralized softmax, and activation stay on the main device.
+        command.extend([
+            "--inter-device-attention",
+            "--trace-fc-kqvo",
+            "--trace-attention",
+            "--trace-fc-ffn",
+        ])
+    else:
+        command.extend(["--only-FC", "--op-trace"])
+    return command
+
+
 def trace_root(args):
     if args.trace_root:
-        return args.trace_root
+        root = args.trace_root
+        return os.path.join(root, systolic_trace_variant(args)) if args.systolic_pim else root
     name = experiment_name(args)
     # LPDDR4X nCCD sweeps reuse one functional trace set; only Ramulator
     # timing/log artifacts differ between nCCD values.
     trace_name = name.split("_nCCD", 1)[0]
-    return os.path.join("trace", trace_name)
+    root = os.path.join("trace", trace_name)
+    return os.path.join(root, systolic_trace_variant(args)) if args.systolic_pim else root
 
 
 def log_root(args):
     if args.log_root:
-        return args.log_root
+        root = args.log_root
+        return os.path.join(root, systolic_trace_variant(args)) if args.systolic_pim else root
     _, nccd = split_experiment_name(experiment_name(args))
     if nccd:
-        return os.path.join(experiment_output_dir(args), f"ramulator_{nccd}")
-    return os.path.join(experiment_output_dir(args), "ramulator")
+        root = os.path.join(experiment_output_dir(args), f"ramulator_{nccd}")
+    else:
+        root = os.path.join(experiment_output_dir(args), "ramulator")
+    return os.path.join(root, systolic_trace_variant(args)) if args.systolic_pim else root
+
+
+def systolic_trace_variant(args):
+    variant = f"systolic_pim_{args.systolic_dim}_batch_size_{args.batch_size}"
+    if args.flash_attention:
+        variant += f"_flash_{args.flash_attention_block_size}"
+    return variant
 
 
 def experiment_name(args):
@@ -213,6 +378,9 @@ def trace_max_seq_len(args, seqlen_list):
 
 
 def run_checked_command(command):
+    if "--trace-file" in command:
+        trace_path = Path(command[command.index("--trace-file") + 1])
+        trace_path.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if result.returncode != 0:
         command_str = " ".join(command)
@@ -234,7 +402,7 @@ def generate_trace(args, seqlen_list):
     commands_generate_traces = []
     blocks_per_device = (TransformerBlock_number[args.model] - 1) // args.num_devices + 1
     channels_per_block = args.num_channels // blocks_per_device
-    FC_devices_list = factorize(args.num_devices)
+    FC_devices_list = model_parallel_tp_values(args)
     trace_root_dir = trace_root(args)
     max_seq_len = trace_max_seq_len(args, seqlen_list)
     python = sys.executable
@@ -253,17 +421,46 @@ def generate_trace(args, seqlen_list):
     for seqlen in seqlen_list:
         if args.model_parallel:          
             for FC_devices in FC_devices_list:
-                if trace_needs_generation(f"{trace_root_dir}/model_parallel/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"):
-                    commands_generate_traces.append([python, "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--only-trace", "--num-channels", str(args.num_channels), "--num-banks", str(args.num_banks), "--max-seq-len", str(max_seq_len), "--FC-devices", str(FC_devices), "--model-parallel", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", f"{trace_root_dir}/model_parallel/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"])
+                main_mode = model_parallel_main_mode(args)
+                main_path = f"{trace_root_dir}/{main_mode}/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"
+                if trace_needs_generation(main_path):
+                    commands_generate_traces.append([python, "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--only-trace", "--num-channels", str(args.num_channels), "--num-banks", str(args.num_banks), "--max-seq-len", str(max_seq_len), "--FC-devices", str(FC_devices), "--model-parallel", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", main_path])
                     if args.inter_device_attention:
                         commands_generate_traces[-1].append("--inter-device-attention")
-                if trace_needs_generation(f"{trace_root_dir}/model_parallel_FC/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"):
-                    commands_generate_traces.append([python, "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--only-FC", "--only-trace", "--num-channels", str(args.num_channels), "--num-banks", str(args.num_banks), "--max-seq-len", str(max_seq_len), "--FC-devices", str(FC_devices), "--model-parallel", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", f"{trace_root_dir}/model_parallel_FC/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"])
+                    if args.kv_head_tp:
+                        commands_generate_traces[-1].extend(["--kv-head-tp", "--tp-device-role", "main"])
+                # KV-head TP ranks are compute-symmetric.  One fresh trace is
+                # simulated and replicated across all TP ranks in postprocess;
+                # only their CXL ingress/egress energy differs.
+                if FC_devices == 1 or args.kv_head_tp:
+                    continue
+                helper_mode = model_parallel_helper_mode(args)
+                helper_path = f"{trace_root_dir}/{helper_mode}/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"
+                if trace_needs_generation(helper_path):
+                    commands_generate_traces.append(
+                        model_parallel_helper_trace_command(
+                            args, python, model, FC_devices, seqlen, max_seq_len, helper_path
+                        )
+                    )
         else:
             if channels_per_block < minimal_channel_per_block[args.model]:
                 raise ValueError(f"Channels per block {channels_per_block} is less than minimal channel per block {minimal_channel_per_block[args.model]}")
             if trace_needs_generation(f"{trace_root_dir}/pipeline_parallel/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"):
                 commands_generate_traces.append([python, "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--only-trace", "--num-channels", str(args.num_channels), "--num-banks", str(args.num_banks), "--max-seq-len", str(max_seq_len), "--channels-per-block", str(channels_per_block), "--pipeline-parallel", "--multi-tb-per-device", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", f"{trace_root_dir}/pipeline_parallel/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"])
+
+    if args.systolic_pim:
+        systolic_args = [
+            "--systolic-pim",
+            "--systolic-dim", str(args.systolic_dim),
+            "--batch-size", str(args.batch_size),
+        ]
+        for command in commands_generate_traces:
+            command.extend(systolic_args)
+            if args.flash_attention:
+                command.extend([
+                    "--flash-attention",
+                    "--flash-attention-block-size", str(args.flash_attention_block_size),
+                ])
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.generate_trace_max_workers) as executor:
         futures = [executor.submit(run_checked_command, cmd) for cmd in commands_generate_traces]
@@ -289,7 +486,7 @@ def simulate_trace(args, seqlen_list):
 
     blocks_per_device = (TransformerBlock_number[args.model] - 1) // args.num_devices + 1
     channels_per_block = args.num_channels // blocks_per_device
-    FC_devices_list = factorize(args.num_devices)
+    FC_devices_list = model_parallel_tp_values(args)
     trace_root_dir = trace_root(args)
     log_root_dir = log_root(args)
 
@@ -316,7 +513,7 @@ def simulate_trace(args, seqlen_list):
     for seqlen in seqlen_list:
         if args.model_parallel:
             for FC_devices in FC_devices_list:
-                for mode in ["model_parallel", "model_parallel_FC"]:
+                for mode in model_parallel_modes_for_tp(args, FC_devices):
                     log_file = f"{log_root_dir}/{mode}/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log"
                     trace_file = f"{trace_root_dir}/{mode}/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"
                     queue_simulation(trace_file, log_file)
@@ -333,11 +530,24 @@ def simulate_trace(args, seqlen_list):
 def process_results(args):
     print("Processing results...")
     if args.decode_only and args.model_parallel:
-        mode_list = ["model_parallel", "model_parallel_FC"]
+        mode_list = [model_parallel_main_mode(args)]
+        if (
+            not args.kv_head_tp
+            and any(tp > 1 for tp in model_parallel_tp_values(args))
+        ):
+            mode_list.append(model_parallel_helper_mode(args))
     elif args.decode_only:
         mode_list = ["pipeline_parallel"]
     else:
-        mode_list = model_parallel_mode_list if args.model_parallel else pipeline_parallel_mode_list
+        if args.model_parallel:
+            mode_list = [model_parallel_main_mode(args), "model_parallel_embedding"]
+            if (
+                not args.kv_head_tp
+                and any(tp > 1 for tp in model_parallel_tp_values(args))
+            ):
+                mode_list.append(model_parallel_helper_mode(args))
+        else:
+            mode_list = pipeline_parallel_mode_list
     log_root_dir = log_root(args)
     for mode in mode_list:
         compile_dir = f"{log_root_dir}/{mode}/{args.model}/"
@@ -356,79 +566,279 @@ def process_results(args):
             compiled_results_file.write(result.stdout)
             compiled_results_file.write(result.stderr)
 
-def calculate_acc_latency(args, seqlen):
+def calculate_acc_latency(args, seqlen, tp=1, device_role="main"):
     latency = {}
     GQA_factor = 1.00 + 1.00 / gqa_factor[args.model]
-    latency["RMSNorm_latency"] =  embedding_size[args.model] / 16.00 / 16.00 / args.num_channels * ACCEL_CYCLE["VEC"]    # EMB /16.00 /16.00 ADD
-    latency["RMSNorm_latency"] += SB_RD_CYCLE + SB_WR_CYCLE + 1.00                              # 1 RED
-    latency["RMSNorm_latency"] += RV_RMSNorm_CYCLE                                              # 1 RISCV
+    local_heads = n_heads[args.model] // tp if args.kv_head_tp else n_heads[args.model]
+    local_hidden = embedding_size[args.model] // tp if args.kv_head_tp else embedding_size[args.model]
+    rms_hidden = embedding_size[args.model]
+    latency["RMSNorm_latency"] = rms_hidden / 16.00 / 16.00 / args.num_channels * ACCEL_CYCLE["VEC"]
+    latency["RMSNorm_latency"] += SB_RD_CYCLE + SB_WR_CYCLE + 1.00
+    latency["RMSNorm_latency"] += RV_RMSNorm_CYCLE
     latency["RMSNorm_latency"] = float(2.00 * latency["RMSNorm_latency"]) / float(FREQ / KILO)
-    latency["Softmax_latency"] =  seqlen * n_heads[args.model] / 16.00 / args.num_channels * ACCEL_CYCLE["EXP"]        # TOK*HEAD /16.00 EXP
-    latency["Softmax_latency"] += seqlen * n_heads[args.model] / 16.00 / args.num_channels * ACCEL_CYCLE["VEC"]        # TOK*HEAD /16.00 ADD
-    latency["Softmax_latency"] += n_heads[args.model] * 1.00 * SB_RD_CYCLE                                     # HEAD RED
-    latency["Softmax_latency"] += n_heads[args.model] * RV_SFT_CYCLE_PIPELINE                                  # HEAD RISCV
+    latency["Softmax_latency"] = seqlen * local_heads / 16.00 / args.num_channels * ACCEL_CYCLE["EXP"]
+    latency["Softmax_latency"] += seqlen * local_heads / 16.00 / args.num_channels * ACCEL_CYCLE["VEC"]
+    latency["Softmax_latency"] += local_heads * 1.00 * SB_RD_CYCLE
+    latency["Softmax_latency"] += local_heads * RV_SFT_CYCLE_PIPELINE
     latency["Softmax_latency"] = float(latency["Softmax_latency"]) / float(FREQ / KILO)
-    latency["RotEmbed_latency"] = embedding_size[args.model] * RV_ROTEmbed_CYCLE                                 # EMB RISCV
+    latency["RotEmbed_latency"] = local_hidden * RV_ROTEmbed_CYCLE
     latency["RotEmbed_latency"] = float(GQA_factor * latency["RotEmbed_latency"]) / float(FREQ / KILO)
+    if args.kv_head_tp:
+        shape = kv_head_tp_shape(
+                dim=embedding_size[args.model],
+                query_heads=n_heads[args.model],
+                kv_heads=n_heads[args.model] // gqa_factor[args.model],
+                ffn_dim=ffn_size[args.model],
+                tp=tp,
+            )
+        layout = KVHeadTPLayout(
+            shape=shape,
+            num_channels=args.num_channels,
+            banks_per_channel=args.num_banks,
+            max_seq_len=(args.max_seq_len if args.max_seq_len is not None else seqlen),
+        )
+        # K and V use disjoint channel halves, so their equal-size repacks
+        # overlap.  No bank-private buffer is assumed.
+        repack_groups_per_channel = math.ceil(
+            layout.shape.local_kv_dim
+            / 16.0
+            / layout.kv_projection_channels_per_operand
+        )
+        repack_cycles = repack_groups_per_channel * (
+            SB_RD_CYCLE + SB_WR_CYCLE + 1.0
+        )
+        latency["KVRepack_latency"] = repack_cycles / float(FREQ / KILO)
+
+        if args.systolic_pim:
+            systolic_layout = SystolicTPLayout(
+                shape=shape,
+                num_channels=args.num_channels,
+                banks_per_channel=args.num_banks,
+                max_seq_len=(
+                    args.max_seq_len if args.max_seq_len is not None else seqlen
+                ),
+                systolic_height=args.systolic_dim,
+            )
+            reduction_work = systolic_layout.pnm_reduction_adds(seqlen)
+            for name in ("q", "kv", "sv"):
+                groups_per_channel = math.ceil(
+                    reduction_work[name] / 16.0 / args.num_channels
+                )
+                latency[f"{name.upper()}Reduction_latency"] = (
+                    groups_per_channel * ACCEL_CYCLE["VEC"]
+                ) / float(FREQ / KILO)
+            activation_groups_per_channel = math.ceil(
+                shape.local_ffn_dim / 16.0 / args.num_channels
+            )
+            latency["FusedActivation_latency"] = (
+                activation_groups_per_channel
+                * (ACCEL_CYCLE["EXP"] + 2.0 * ACCEL_CYCLE["VEC"])
+            ) / float(FREQ / KILO)
+        else:
+            reduction_groups_per_channel = math.ceil(
+                layout.v_reduction_adds(seqlen)
+                / 16.0
+                / args.num_channels
+            )
+            latency["SVReduction_latency"] = (
+                reduction_groups_per_channel * ACCEL_CYCLE["VEC"]
+            ) / float(FREQ / KILO)
+    else:
+        latency["KVRepack_latency"] = 0.0
+        latency["SVReduction_latency"] = 0.0
     return latency
 
 def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per_device, blocks_per_device, embedding_latency, utilized_devices, pp, tp):
 
     log_root_dir = log_root(args)
     if args.model_parallel:
-        path = f"{log_root_dir}/model_parallel/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log"
+        main_mode = model_parallel_main_mode(args)
+        path = f"{log_root_dir}/{main_mode}/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log"
     else:
         path = f"{log_root_dir}/pipeline_parallel/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt.log"
     if missing_or_empty(path):
         raise FileNotFoundError(f"Simulation log is missing or empty: {path}. Re-run --generate_trace --simulate_trace before --update_csv.")
     stats = command_processor(path)
-    pim_latency = stats["latency"]
+    main_pim_latency = stats["latency"]
+    helper_path = None
+    helper_stats = None
+    helper_pim_latency = 0.0
+    if args.model_parallel and FC_devices > 1 and not args.kv_head_tp:
+        helper_mode = model_parallel_helper_mode(args)
+        helper_path = f"{log_root_dir}/{helper_mode}/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log"
+        if missing_or_empty(helper_path):
+            raise FileNotFoundError(
+                f"Simulation log is missing or empty: {helper_path}. "
+                "Re-run --generate_trace --simulate_trace before --update_csv."
+            )
+        helper_stats = command_processor(helper_path)
+        helper_pim_latency = helper_stats["latency"]
+    elif args.kv_head_tp and FC_devices > 1:
+        # Every head-TP rank executes the same local tensor shapes and mapping.
+        helper_pim_latency = main_pim_latency
+    pim_latency = max(main_pim_latency, helper_pim_latency)
 
     if args.model_parallel:
-        if "Llama" in args.model:
-            cxl_latency = llama_latency([embedding_size[args.model], ffn_size[args.model]], PCIe_lanes_per_device, FC_devices, args.num_devices)
+        if args.kv_head_tp:
+            tp_collective_cxl_latency = kv_head_tp_latency(
+                embedding_size[args.model] * args.batch_size,
+                PCIe_lanes_per_device,
+                FC_devices,
+                args.num_devices,
+            )
+            pp_handoff_cxl_latency = (
+                vector_latency(
+                    embedding_size[args.model] * args.batch_size,
+                    PCIe_lanes_per_device,
+                )
+                if pp > 1
+                else 0.0
+            )
+            cxl_latency = tp_collective_cxl_latency + pp_handoff_cxl_latency
+        elif "Llama" in args.model:
+            cxl_latency = llama_latency([embedding_size[args.model] * args.batch_size, ffn_size[args.model] * args.batch_size], PCIe_lanes_per_device, FC_devices, args.num_devices)
         else:
-            cxl_latency = gpt_latency([embedding_size[args.model], ffn_size[args.model]], PCIe_lanes_per_device, FC_devices, args.num_devices)
+            cxl_latency = gpt_latency([embedding_size[args.model] * args.batch_size, ffn_size[args.model] * args.batch_size], PCIe_lanes_per_device, FC_devices, args.num_devices)
         embedding_latency_data = 0.00 if args.decode_only else embedding_latency['model_parallel'][FC_devices]
     else:
-        cxl_latency = vector_latency(embedding_size[args.model], PCIe_lanes_per_device)
+        cxl_latency = vector_latency(embedding_size[args.model] * args.batch_size, PCIe_lanes_per_device)
         embedding_latency_data = 0.00 if args.decode_only else embedding_latency['pipeline_parallel'][channels_per_block]
-    acc_latency_dict = calculate_acc_latency(args, seqlen)
-    acc_latency = (acc_latency_dict["RMSNorm_latency"] + acc_latency_dict["Softmax_latency"] + acc_latency_dict["RotEmbed_latency"]) * blocks_per_device
-    transformer_block_latency = pim_latency + cxl_latency + acc_latency
+    if not args.kv_head_tp:
+        tp_collective_cxl_latency = 0.0
+        pp_handoff_cxl_latency = cxl_latency if pp > 1 else 0.0
+    main_acc_latency_dict = calculate_acc_latency(args, seqlen, FC_devices, "main")
+    helper_acc_latency_dict = calculate_acc_latency(args, seqlen, FC_devices, "helper")
+    main_acc_latency = sum(main_acc_latency_dict.values()) * blocks_per_device * args.batch_size
+    helper_acc_latency = (
+        sum(helper_acc_latency_dict.values()) * blocks_per_device * args.batch_size
+        if helper_stats is not None or (args.kv_head_tp and FC_devices > 1)
+        else 0.0
+    )
+    acc_latency = max(main_acc_latency, helper_acc_latency)
+    if args.kv_head_tp:
+        critical_local_latency = max(
+            main_pim_latency + main_acc_latency,
+            helper_pim_latency + helper_acc_latency,
+        )
+        transformer_block_latency = critical_local_latency + cxl_latency
+    else:
+        critical_local_latency = pim_latency + acc_latency
+        transformer_block_latency = critical_local_latency + cxl_latency
     token_latency = transformer_block_latency * TransformerBlock_number[args.model] + embedding_latency_data
     if not args.decode_only:
         token_latency += InOut_latency
-    throughput = 1000 / token_latency * pp
+    throughput = 1000 / token_latency * pp * args.batch_size
 
     energy_token = {}
-    PCIE = embedding_size[args.model] * 10 + ffn_size[args.model] * 2 if args.model_parallel else embedding_size[args.model]
+    if args.kv_head_tp:
+        main_PCIE, helper_PCIE, system_PCIE = kv_head_tp_pcie_bits(
+            embedding_size[args.model] * args.batch_size, FC_devices
+        )
+        tp_collective_PCIE = system_PCIE
+        pp_handoff_PCIE = (
+            embedding_size[args.model] * args.batch_size * 16 if pp > 1 else 0
+        )
+        # Charge the one source-side pipeline transfer once per TP group.  TP
+        # helper ranks retain only their two all-reduce broadcast shares.
+        main_PCIE += pp_handoff_PCIE
+        system_PCIE += pp_handoff_PCIE
+        local_heads = n_heads[args.model] // FC_devices
+        local_hidden = embedding_size[args.model] // FC_devices
+    else:
+        PCIE = (embedding_size[args.model] * 10 + ffn_size[args.model] * 2 if args.model_parallel else embedding_size[args.model]) * args.batch_size
+        main_PCIE = helper_PCIE = system_PCIE = PCIE
+        tp_collective_PCIE = 0
+        pp_handoff_PCIE = system_PCIE if pp > 1 else 0
+        local_heads = n_heads[args.model]
+        local_hidden = embedding_size[args.model]
     energy_main, latency_main = power_calculator(
-        stats, PCIE, n_heads[args.model], embedding_size[args.model], seqlen, gqa_factor[args.model],
+        stats, main_PCIE, local_heads, local_hidden, seqlen, gqa_factor[args.model],
         dram_power_impl=args.dram_power_impl,
         dram_energy_model=args.dram_energy_model,
         command_trace_prefix=command_trace_prefix_for_log(path),
+        rmsnorm_hidden_dim=(embedding_size[args.model] if args.kv_head_tp else None),
     )
-    if args.model_parallel:
-        pipeline_stages = args.num_devices // FC_devices
-        FC_path = f"{log_root_dir}/model_parallel_FC/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log"
-        if missing_or_empty(FC_path):
-            raise FileNotFoundError(f"Simulation log is missing or empty: {FC_path}. Re-run --generate_trace --simulate_trace before --update_csv.")
-        stats_FC = command_processor(FC_path)
-        energy_FC, latency_FC = power_calculator(
-            stats_FC, PCIE, n_heads[args.model], embedding_size[args.model], seqlen, gqa_factor[args.model],
-            dram_power_impl=args.dram_power_impl,
-            dram_energy_model=args.dram_energy_model,
-            command_trace_prefix=command_trace_prefix_for_log(FC_path),
+    if args.kv_head_tp:
+        kv_layout = KVHeadTPLayout(
+            shape=kv_head_tp_shape(
+                dim=embedding_size[args.model],
+                query_heads=n_heads[args.model],
+                kv_heads=n_heads[args.model] // gqa_factor[args.model],
+                ffn_dim=ffn_size[args.model],
+                tp=FC_devices,
+            ),
+            num_channels=args.num_channels,
+            banks_per_channel=args.num_banks,
+            max_seq_len=(args.max_seq_len if args.max_seq_len is not None else seqlen),
         )
-        for comp in energy_main.keys():
-            energy_token[comp] = (energy_main[comp] + energy_FC[comp] * (FC_devices - 1)) * TransformerBlock_number[args.model]
+        if args.systolic_pim:
+            systolic_layout = SystolicTPLayout(
+                shape=kv_layout.shape,
+                num_channels=args.num_channels,
+                banks_per_channel=args.num_banks,
+                max_seq_len=(
+                    args.max_seq_len if args.max_seq_len is not None else seqlen
+                ),
+                systolic_height=args.systolic_dim,
+            )
+            reduction_adds = sum(
+                systolic_layout.pnm_reduction_adds(seqlen).values()
+            )
+            activation_elements = kv_layout.shape.local_ffn_dim
+        else:
+            reduction_adds = kv_layout.v_reduction_adds(seqlen)
+            activation_elements = 0
+        pnm_energy = kv_head_tp_pnm_dynamic_energy(
+            stats,
+            repack_elements=2 * kv_layout.shape.local_kv_dim,
+            reduction_adds=reduction_adds,
+            activation_elements=activation_elements,
+        )
+        energy_main = add_energy_terms(energy_main, pnm_energy)
+    energy_main = adjust_systolic_energy(energy_main, args)
+    if args.model_parallel:
+        if args.kv_head_tp and FC_devices > 1:
+            # Reuse the symmetric compute trace, but apply each helper's own
+            # share of the two all-reduce payloads.
+            energy_helper, _latency_helper = power_calculator(
+                stats, helper_PCIE, local_heads, local_hidden, seqlen, gqa_factor[args.model],
+                dram_power_impl=args.dram_power_impl,
+                dram_energy_model=args.dram_energy_model,
+                command_trace_prefix=command_trace_prefix_for_log(path),
+                rmsnorm_hidden_dim=embedding_size[args.model],
+            )
+            energy_helper = add_energy_terms(energy_helper, pnm_energy)
+            energy_helper = adjust_systolic_energy(energy_helper, args)
+            for comp in energy_main.keys():
+                energy_token[comp] = (
+                    energy_main[comp] + energy_helper[comp] * (FC_devices - 1)
+                ) * TransformerBlock_number[args.model]
+        elif helper_stats is None:
+            for comp in energy_main.keys():
+                energy_token[comp] = energy_main[comp] * TransformerBlock_number[args.model]
+        else:
+            energy_helper, _latency_helper = power_calculator(
+                helper_stats, helper_PCIE, local_heads, local_hidden, seqlen, gqa_factor[args.model],
+                dram_power_impl=args.dram_power_impl,
+                dram_energy_model=args.dram_energy_model,
+                command_trace_prefix=command_trace_prefix_for_log(helper_path),
+                device_role=(
+                    "kv_head_helper"
+                    if args.kv_head_tp
+                    else ("inter_device_helper" if args.inter_device_attention else "fc_helper")
+                ),
+            )
+            energy_helper = adjust_systolic_energy(energy_helper, args)
+            for comp in energy_main.keys():
+                energy_token[comp] = (
+                    energy_main[comp] + energy_helper[comp] * (FC_devices - 1)
+                ) * TransformerBlock_number[args.model]
     else:
         for comp in energy_main.keys():
             energy_token[comp] = energy_main[comp] * utilized_devices
-    total_energy = 0
-    for comp in energy_token.keys():
-        total_energy += energy_token[comp]
+    batch_group_energy, total_energy = normalize_batch_group_energy(
+        energy_token, args.batch_size
+    )
     # Energy per output token times sustained output rate gives the steady-
     # state power of all participating devices, including pipeline overlap.
     total_power = total_energy * throughput / 1000.0
@@ -439,21 +849,47 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
         'Device number': args.num_devices,
         'Pipeline parallelism': pp,
         'Tensor parallelism': tp,
+        'Batch size': args.batch_size,
+        'Systolic pim': args.systolic_pim,
+        'Systolic dim': args.systolic_dim,
         'Channels per device': args.num_channels,
         'Banks per device': args.num_banks,
         'Channels per block': channels_per_block,
         'Sequence length': seqlen,
         'Context window': args.max_seq_len if args.max_seq_len is not None else seqlen,
         'PIM latency': pim_latency,
+        'Main PIM latency': main_pim_latency,
+        'Helper PIM latency': helper_pim_latency,
         'CXL latency': cxl_latency,
+        'TP collective CXL latency': tp_collective_cxl_latency,
+        'PP handoff CXL latency': pp_handoff_cxl_latency,
         'Acc latency': acc_latency,
+        'Main Acc latency': main_acc_latency,
+        'Helper Acc latency': helper_acc_latency,
+        'KV repack latency': main_acc_latency_dict.get('KVRepack_latency', 0.0) * blocks_per_device * args.batch_size,
+        'Q reduction latency': main_acc_latency_dict.get('QReduction_latency', 0.0) * blocks_per_device * args.batch_size,
+        'KV reduction latency': main_acc_latency_dict.get('KVReduction_latency', 0.0) * blocks_per_device * args.batch_size,
+        'SV reduction latency': main_acc_latency_dict.get('SVReduction_latency', 0.0) * blocks_per_device * args.batch_size,
+        'Fused activation latency': main_acc_latency_dict.get('FusedActivation_latency', 0.0) * blocks_per_device * args.batch_size,
+        'Critical local latency': critical_local_latency,
         'TransformerBlock latency': transformer_block_latency,
         'Embedding latency': embedding_latency_data,
         'Token latency (ms)': token_latency,
+        'Batch group latency (ms)': token_latency,
         'Throughput (tokens/s)': throughput,
         'Token energy (mJ)': total_energy,
+        'Batch group energy (mJ)': batch_group_energy,
         'Total power (W)': total_power,
         'Device utilization': device_utilization,
+        'Attention mapping': (
+            'kv_head'
+            if args.kv_head_tp
+            else ('inter_device' if args.inter_device_attention else ('master' if args.model_parallel else 'pipeline'))
+        ),
+        'KV cache mapping': 'kv_head_sharded' if args.kv_head_tp else ('fully_tp_sharded' if args.inter_device_attention else 'master_local'),
+        'CXL payload (bits/block)': system_PCIE,
+        'TP collective CXL payload (bits/block)': tp_collective_PCIE,
+        'PP handoff CXL payload (bits/block)': pp_handoff_PCIE,
         'DRAM energy model': args.dram_energy_model,
     }
     new_result_df = pd.DataFrame([new_result])
@@ -472,14 +908,20 @@ def update_csv(args, seqlen_list):
             results_df['DRAM energy model'] = 'legacy'
         if 'Context window' not in results_df.columns:
             results_df['Context window'] = results_df['Sequence length']
+        if 'Main PIM latency' not in results_df.columns:
+            results_df['Main PIM latency'] = results_df['PIM latency']
+        if 'Helper PIM latency' not in results_df.columns:
+            results_df['Helper PIM latency'] = 0.0
+        if 'Attention mapping' not in results_df.columns:
+            results_df['Attention mapping'] = 'legacy_unspecified'
     else:
-        columns = ['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Channels per device', 'Banks per device', 'Channels per block', 'Sequence length', 'Context window', 'PIM latency', 'CXL latency', 'Acc latency', 'TransformerBlock latency', 'Embedding latency', 'Token latency (ms)', 'Throughput (tokens/s)', 'Token energy (mJ)', 'Total power (W)', 'Device utilization', 'DRAM energy model']
+        columns = ['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'Channels per device', 'Banks per device', 'Channels per block', 'Sequence length', 'Context window', 'PIM latency', 'Main PIM latency', 'Helper PIM latency', 'CXL latency', 'Acc latency', 'TransformerBlock latency', 'Embedding latency', 'Token latency (ms)', 'Throughput (tokens/s)', 'Token energy (mJ)', 'Total power (W)', 'Device utilization', 'Attention mapping', 'DRAM energy model']
         results_df = pd.DataFrame(columns=columns)
 
     embedding_latency = {'pipeline_parallel': {}, 'model_parallel': {}}
 
     if args.model_parallel:
-        FC_devices_list = factorize(args.num_devices)
+        FC_devices_list = model_parallel_tp_values(args)
 
     if args.decode_only:
         pass
@@ -534,8 +976,8 @@ def update_csv(args, seqlen_list):
             results_df = pd.concat([results_df, new_result_df], ignore_index=True)
 
     # Save the DataFrame to a CSV file
-    results_df = results_df.drop_duplicates(subset=['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Channels per device', 'Banks per device', 'Channels per block', 'Sequence length', 'Context window', 'DRAM energy model'], keep='last')
-    results_df = results_df.sort_values(by=['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Channels per device', 'Banks per device', 'Channels per block', 'Context window', 'Sequence length', 'DRAM energy model'])
+    results_df = results_df.drop_duplicates(subset=['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'Channels per device', 'Banks per device', 'Channels per block', 'Sequence length', 'Context window', 'Attention mapping', 'DRAM energy model'], keep='last')
+    results_df = results_df.sort_values(by=['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'Channels per device', 'Banks per device', 'Channels per block', 'Context window', 'Sequence length', 'DRAM energy model'])
     results_df.to_csv(args.simulation_result_path, index=False)
     # print(results_df)
 
@@ -551,17 +993,21 @@ def process_throughputs(args):
         df_simulation = df_simulation[df_simulation['Banks per device'] == args.num_banks]
     if 'DRAM energy model' in df_simulation.columns:
         df_simulation = df_simulation[df_simulation['DRAM energy model'] == args.dram_energy_model]
+    if 'Systolic pim' in df_simulation.columns:
+        df_simulation = df_simulation[df_simulation['Systolic pim'] == args.systolic_pim]
+    if args.systolic_pim and 'Systolic dim' in df_simulation.columns:
+        df_simulation = df_simulation[df_simulation['Systolic dim'] == args.systolic_dim]
     
     if os.path.exists(args.processed_result_path):
         results_df = pd.read_csv(args.processed_result_path)
     else:
-        columns = ['Model', 'Device number', 'Banks per device', 'Seqlen', 'Pipeline parallelism', 'Tensor parallelism', 'Phase', 'DRAM energy model', 'Total Latency (s)', 'Throughput (tokens/s)', 'Energy per Token (mJ)', 'Total power (W)']
+        columns = ['Model', 'Device number', 'Banks per device', 'Seqlen', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'Phase', 'DRAM energy model', 'Total Latency (s)', 'Throughput (tokens/s)', 'Energy per Token (mJ)', 'Total power (W)']
         results_df = pd.DataFrame(columns=columns)
 
 
     if args.model_parallel:
 
-        FC_devices_list = factorize(args.num_devices)
+        FC_devices_list = model_parallel_tp_values(args)
 
         for FC_Devices in FC_devices_list:
 
@@ -592,6 +1038,9 @@ def process_throughputs(args):
                 'Seqlen': args.prefill + args.decoding,
                 'Pipeline parallelism': pp,
                 'Tensor parallelism': tp,
+                'Batch size': args.batch_size,
+                'Systolic pim': args.systolic_pim,
+                'Systolic dim': args.systolic_dim,
                 'Phase': args.phase,
                 'DRAM energy model': args.dram_energy_model,
                 'Total Latency (s)': total_latency,
@@ -628,6 +1077,9 @@ def process_throughputs(args):
             'Seqlen': args.prefill + args.decoding,
             'Pipeline parallelism': TransformerBlock_number[args.model],
             'Tensor parallelism': 1,
+            'Batch size': args.batch_size,
+            'Systolic pim': args.systolic_pim,
+            'Systolic dim': args.systolic_dim,
             'Phase': args.phase,
             'DRAM energy model': args.dram_energy_model,
             'Total Latency (s)': total_latency,
@@ -654,7 +1106,8 @@ if __name__ == "__main__":
     else:
         seqlen_list = [i * args.seqlen_gap for i in range(1, (args.prefill + args.decoding) // args.seqlen_gap + 1)]
         
-    for mode in pipeline_parallel_mode_list + model_parallel_mode_list:
+    runtime_modes = pipeline_parallel_mode_list + model_parallel_mode_list + [INTER_DEVICE_HELPER_MODE]
+    for mode in dict.fromkeys(runtime_modes):
         os.makedirs(f"{trace_root(args)}/{mode}/{args.model}", exist_ok=True)
         os.makedirs(f"{log_root(args)}/{mode}/{args.model}", exist_ok=True)
 

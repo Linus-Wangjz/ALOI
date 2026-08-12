@@ -33,6 +33,7 @@ def get_args():
     parser.add_argument("--trace-norm", action="store_true")
     parser.add_argument("--trace-fc-kqvo", action="store_true")
     parser.add_argument("--trace-attention", action="store_true")
+    parser.add_argument("--trace-score", action="store_true")
     parser.add_argument("--trace-softmax", action="store_true")
     parser.add_argument("--trace-fc-ffn", action="store_true")
     parser.add_argument("--trace-activation", action="store_true")
@@ -49,6 +50,7 @@ def get_args():
     parser.add_argument("--double-bank", action="store_true", help="one transformer block map to 2x banks")
     parser.add_argument("--quad-bank", action="store_true", help="one transformer block map to 4x banks")
     parser.add_argument("--multi-tb-per-device", action="store_true")
+    parser.add_argument("--single-tb-per-device", action="store_true")
     parser.add_argument("--ffn_dim", type=int, help="FFN dimension")
     parser.add_argument("--n_heads", type=int, help="Number of heads")
     parser.add_argument("--n_kv_heads", type=int, help="Number of kv heads for GQA", default=8)
@@ -61,7 +63,42 @@ def get_args():
     parser.add_argument("--seqlen", type=int, help="specify seqlen for only trace mode", default=4096)
     parser.add_argument("--trace-file", help="Name of generated trace file", default="null.log")
     parser.add_argument("--inter-device-attention", action="store_true")
+    parser.add_argument("--full-accelerator-softmax", action="store_true")
+    parser.add_argument("--flash-attention", action="store_true")
+    parser.add_argument("--flash-attention-block-size", type=int, default=1024)
+    parser.add_argument("--EWMUL-PNM", action="store_true")
+    parser.add_argument("--systolic-pim-microbench", action="store_true")
+    parser.add_argument("--microbench", type=str)
+    parser.add_argument("--systolic-pim", action="store_true")
+    parser.add_argument(
+        "--systolic-dim",
+        type=int,
+        choices=[1, 2, 4, 8, 16],
+        default=1,
+        help="Systolic array height; the array width is 16",
+    )
+    parser.add_argument("--batch-size", type=int, default=1, help="Batch size for systolic PIM")
+    parser.add_argument("--total-experts", type=int, default=1)
+    parser.add_argument("--active-experts", type=int, default=1)
+    parser.add_argument("--MLA", action="store_true")
+    parser.add_argument("--q-lora-rank", type=int, default=1536)
+    parser.add_argument("--kv-lora-rank", type=int, default=512)
+    parser.add_argument(
+        "--kv-head-tp",
+        action="store_true",
+        help="Use standard query/KV-head TP with local attention and TP-sharded KV cache",
+    )
+    parser.add_argument(
+        "--tp-device-role",
+        choices=["main", "helper"],
+        default="main",
+        help="Device role for a KV-head TP trace",
+    )
     args = parser.parse_args()
+    if args.kv_head_tp and args.inter_device_attention:
+        parser.error("--kv-head-tp and --inter-device-attention are mutually exclusive")
+    if args.batch_size < 1:
+        parser.error("--batch-size must be positive")
     return args
 
 def compare_1d(a, b, name):

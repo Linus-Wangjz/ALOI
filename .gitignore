@@ -3,3 +3,4 @@ __pycache__/
 tmp.log
 logs.txt
 /output
+cent_simulation/output

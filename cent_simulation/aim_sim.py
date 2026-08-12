@@ -1,3 +1,7 @@
+from dataclasses import asdict
+import json
+import math
+
 import torch
 torch.multiprocessing.set_sharing_strategy('file_system')
 
@@ -8,6 +12,7 @@ class Bank():
         self.burst_length = args.burst_length
         self.arrays = 0 if args.only_trace else torch.zeros(torch.Size([self.DRAM_row, self.DRAM_column]))
         self.latch = 0 if args.only_trace else [0 for _ in range(args.reuse_size)]
+        self.systolic_latch = 0 if args.only_trace else torch.zeros(torch.Size([args.systolic_dim, self.burst_length]))
         self.activation_function_register = 0
 
 class Channel(Bank):
@@ -42,6 +47,7 @@ class PIM():
         self.burst_length = args.burst_length
         self.num_banks = args.num_banks
         self.num_channels = args.num_channels
+        self.systolic_dim = args.systolic_dim
         self.threads = args.threads
         self.pim_device = {}
         if not args.only_trace:
@@ -51,6 +57,8 @@ class PIM():
             else:
                 self.pim_device["dimm_0"] = DIMM(args)
         self.op_trace = args.op_trace
+        self.systolic_pim = args.systolic_pim
+        self.batch_size = args.batch_size
         self.trace_file = args.trace_file
         self.file = open(self.trace_file, "w")
         # print(torch.linspace(-10, 10, 512))
@@ -78,6 +86,11 @@ class PIM():
             "breakdown_sa_output": 0,
             "breakdown_ffn_weight": 0,
             "breakdown_embedding_weight": 0,
+        }
+        self.systolic_pipeline_cycles = {
+            "fill": 0,
+            "reduction": 0,
+            "drain": 0,
         }
         self.timing_constant = {
             "COPY_GB_BK": 45.5,
@@ -116,7 +129,7 @@ class PIM():
         dimm_size = channel_size * self.num_channels
         addr = dimm_index * dimm_size + channel_index * channel_size + bank_index * bank_size + row_index * self.DRAM_column + col
         return addr
-    
+
     def store_to_DRAM_single_bank(self, dimm_index, channel_index, bank_index, row_index, col_index, size, data, op_trace):
         # GDDR6 stores with 32B granularity
         if op_trace and dimm_index == 0:
@@ -136,6 +149,71 @@ class PIM():
             for i in range((size - 1) // self.burst_length + 1):
                 self.file.write("R MEM {} {} {}\n".format(channel_index, bank_index, row_index))
         return self.pim_device["dimm_" + str(dimm_index)].dimm["channel_" + str(channel_index)].channel["bank_" + str(bank_index)].arrays[row_index][col_index : col_index + size]
+
+    def WR_BIAS_systolic_pim(self, dimm, channel, utilized_channels, bias, systolic_dim, op_trace):
+        for latch_index in range(systolic_dim):
+            if op_trace and dimm == 0:
+                channel_multi_transformer_block_required = self.num_channels // utilized_channels * utilized_channels
+                channel_lst = [channel for channel in range(channel_multi_transformer_block_required)]
+                self.file.write("AiM WR_BIAS 0 {}\n".format(self.hex_channel_mask(channel_lst)))
+            for bank in range(self.num_banks):
+                self.pim_device["dimm_" + str(dimm)].dimm["channel_" + str(channel)].channel["bank_" + str(bank)].systolic_latch[latch_index] = torch.full((self.burst_length,), bias[bank])
+
+    def WR_GB_systolic_pim(self, dimm, channel, utilized_channels, col_index, op_size, data, op_trace):
+        if op_trace and dimm == 0:
+            channel_multi_transformer_block_required = self.num_channels // utilized_channels * utilized_channels
+            channel_lst = [channel for channel in range(channel_multi_transformer_block_required)]
+            self.file.write("AiM WR_GB {} 0 {}\n".format(op_size, self.hex_channel_mask(channel_lst)))
+        self.pim_device["dimm_" + str(dimm)].dimm["channel_" + str(channel)].GB[col_index : col_index + op_size * self.burst_length] = data
+
+    def MAC_systolic_pim(self, dimm, channel, utilized_channels, row_index, GB_col_index, op_size, systolic_dim, op_trace, flag=False):
+        if op_trace and dimm == 0:
+            channel_multi_transformer_block_required = self.num_channels // utilized_channels * utilized_channels
+            channel_lst = [channel for channel in range(channel_multi_transformer_block_required)]
+            self.file.write("AiM MAC_ABK {} {} {}\n".format(op_size, self.hex_channel_mask(channel_lst), row_index))
+        for bank in range(self.num_banks):
+            Row_Buffer_operand = self.load_from_DRAM_single_bank(dimm, channel, bank, row_index, 0, op_size * self.burst_length, False).reshape((op_size, self.burst_length))
+            # if bank == 0 and flag:
+            #     print(dimm, channel, GB_col_index, systolic_dim, op_size, self.pim_device["dimm_" + str(dimm)].dimm["channel_" + str(channel)].GB.shape)
+            GB_operand = self.pim_device["dimm_" + str(dimm)].dimm["channel_" + str(channel)].GB[GB_col_index: GB_col_index + systolic_dim * op_size].reshape((op_size, systolic_dim)).transpose(0, 1)   # [512] -> [64, 8] -> [8, 64]
+            # if bank == 0 and flag:
+            #     print("channel", channel, "bank", bank)
+            #     print("GB", GB_col_index, GB_col_index + systolic_dim * op_size, GB_operand.shape, GB_operand)
+            #     print("Row", row_index, Row_Buffer_operand, Row_Buffer_operand.shape)
+            #     print("results", torch.matmul(GB_operand, Row_Buffer_operand))
+            self.pim_device["dimm_" + str(dimm)].dimm["channel_" + str(channel)].channel["bank_" + str(bank)].systolic_latch += torch.matmul(GB_operand, Row_Buffer_operand)
+
+    def MAC_output_systolic_pim(self, dimm, channel, utilized_channels, row_index, GB_col_index, op_size, systolic_dim, op_trace, flag=False):
+        if op_trace and dimm == 0:
+            channel_multi_transformer_block_required = self.num_channels // utilized_channels * utilized_channels
+            channel_lst = [channel for channel in range(channel_multi_transformer_block_required)]
+            self.file.write("AiM MAC_ABK {} {} {}\n".format(op_size, self.hex_channel_mask(channel_lst), row_index))
+        for bank in range(self.num_banks):
+            Row_Buffer_operand = self.load_from_DRAM_single_bank(dimm, channel, bank, row_index, 0, op_size * self.burst_length, False).reshape((op_size, self.burst_length))
+            Row_Buffer_operand_a = Row_Buffer_operand[:, :self.burst_length//2]
+            Row_Buffer_operand_b = Row_Buffer_operand[:, self.burst_length//2:]
+            # if bank == 0 and flag:
+            #     print(dimm, channel, GB_col_index, systolic_dim, op_size, self.pim_device["dimm_" + str(dimm)].dimm["channel_" + str(channel)].GB.shape)
+            GB_operand = self.pim_device["dimm_" + str(dimm)].dimm["channel_" + str(channel)].GB[GB_col_index: GB_col_index + systolic_dim * op_size*2].reshape((op_size*2, systolic_dim)).transpose(0, 1)   # [1024] -> [128, 8] -> [8, 128]
+            GB_operand_a = GB_operand[:, :op_size]
+            GB_operand_b = GB_operand[:, op_size:]
+            # if bank == 6 and flag:
+            #     print("channel", channel, "bank", bank)
+            #     print("GB", GB_col_index, GB_col_index + systolic_dim * op_size, GB_operand.shape, GB_operand)
+            #     print("Row", row_index, Row_Buffer_operand, Row_Buffer_operand.shape)
+            self.pim_device["dimm_" + str(dimm)].dimm["channel_" + str(channel)].channel["bank_" + str(bank)].systolic_latch[:, :self.burst_length//2] += torch.matmul(GB_operand_a, Row_Buffer_operand_a)
+            self.pim_device["dimm_" + str(dimm)].dimm["channel_" + str(channel)].channel["bank_" + str(bank)].systolic_latch[:, self.burst_length//2:] += torch.matmul(GB_operand_b, Row_Buffer_operand_b)
+
+    def RD_MAC_systolic_pim(self, dimm, channel, utilized_channels, systolic_dim, op_trace):
+        result = torch.empty(self.num_banks, systolic_dim, self.burst_length)
+        for latch_index in range(systolic_dim):
+            if op_trace and dimm == 0:
+                channel_multi_transformer_block_required = self.num_channels // utilized_channels * utilized_channels
+                channel_lst = [channel for channel in range(channel_multi_transformer_block_required)]
+                self.file.write("AiM RD_MAC 0 {}\n".format(self.hex_channel_mask(channel_lst)))
+            for bank in range(self.num_banks):
+                result[bank][latch_index] = self.pim_device["dimm_" + str(dimm)].dimm["channel_" + str(channel)].channel["bank_" + str(bank)].systolic_latch[latch_index]
+        return result
 
     def WR_BIAS(self, dimm, channel, utilized_channels, latch_index, bias, op_trace):
         self.time["WR_BIAS"] += self.timing_constant["WR_BIAS"]
@@ -264,11 +342,12 @@ class PIM():
         self.time["WR_BIAS"] += self.timing_constant["WR_BIAS"]
         self.file.write("AiM WR_BIAS 0 {}\n".format(self.hex_channel_mask(channel)))
 
-    def MAC_ABK_only_trace(self, channel, row_index, op_size, timing):
-        self.time[timing] += self.timing_constant["MAC_ABK"] + op_size
+    def MAC_ABK_only_trace(self, channel, row_index, op_size, timing=None):
+        if timing is not None:
+            self.time[timing] += self.timing_constant["MAC_ABK"] + op_size
         self.time["MAC_ABK"] += self.timing_constant["MAC_ABK"] + op_size
         self.file.write("AiM MAC_ABK {} {} {}\n".format(op_size, self.hex_channel_mask(channel), row_index))
-    
+
     def RD_MAC_only_trace(self, channel):
         self.time["RD_MAC"] += self.timing_constant["RD_MAC"]
         self.file.write("AiM RD_MAC 0 {}\n".format(self.hex_channel_mask(channel)))
@@ -309,6 +388,92 @@ class PIM():
     
     def finish(self):
         self.file.write("AiM EOC\n")
+        self.file.flush()
+        if self.systolic_pim:
+            metadata = {
+                "array": {
+                    "height": self.systolic_dim,
+                    "width": self.burst_length,
+                },
+                "batch_size": self.batch_size,
+                "pipeline_cycles": dict(self.systolic_pipeline_cycles),
+                "kernel_pipeline_cycles": getattr(
+                    self, "systolic_kernel_pipeline_cycles", {}
+                ),
+                "kernel_active_rows": getattr(
+                    self, "systolic_kernel_active_rows", {}
+                ),
+                "standard_tp": False,
+            }
+            layout = getattr(self, "systolic_tp_layout", None)
+            if layout is not None:
+                seqlen = getattr(self, "seqlen", layout.max_seq_len)
+                sv_layout = layout.sv(seqlen)
+                sv_metadata = asdict(sv_layout)
+                sv_metadata.update(
+                    {
+                        "height_utilization": sv_layout.height_utilization,
+                        "width_utilization": sv_layout.width_utilization,
+                    }
+                )
+                metadata.update(
+                    {
+                        "standard_tp": True,
+                        "tp": layout.shape.tp,
+                        "sequence_length": seqlen,
+                        "shape": asdict(layout.shape),
+                        "projections": {
+                            name: asdict(getattr(layout, name))
+                            for name in ("q", "kv", "wo", "fused_ffn", "w2")
+                        },
+                        "qk": {
+                            "query_waves": layout.qk_query_waves,
+                            "total_query_waves": (
+                                self.batch_size * layout.qk_query_waves
+                            ),
+                            "height_utilization": layout.qk_height_utilization,
+                            "width_utilization": layout.k_width_utilization(seqlen),
+                            "contexts_per_bank": layout.k_contexts_per_bank(seqlen),
+                        },
+                        "sv": sv_metadata,
+                        "batch_schedule": {
+                            "projection_rows_per_wave": self.systolic_dim,
+                            "projection_waves": math.ceil(
+                                self.batch_size / self.systolic_dim
+                            ),
+                            "attention_batches": self.batch_size,
+                            "attention_batch_order": "contiguous_cache_blocks",
+                        },
+                        "cache_rows_per_batch": dict(
+                            zip(
+                                ("k", "v"),
+                                self.systolic_tp_cache_rows_per_batch(),
+                            )
+                        ),
+                        "pnm_reduction_adds": layout.pnm_reduction_adds(seqlen),
+                        "physical_rows_per_bank": {
+                            name: self.dic_row[name]
+                            for name in (
+                                "wq",
+                                "wk",
+                                "wv",
+                                "cache_k",
+                                "cache_v",
+                                "wo",
+                                "w1",
+                                "w3",
+                                "w2",
+                            )
+                        },
+                        "fused_row_aliases": {
+                            "wk_wv": self.wk_row_index == self.wv_row_index,
+                            "w1_w3": self.w1_row_index == self.w3_row_index,
+                        },
+                    }
+                )
+            with open(self.trace_file + ".systolic.json", "w") as sidecar:
+                json.dump(metadata, sidecar, indent=2, sort_keys=True)
+                sidecar.write("\n")
 
     def MAC(self, A, B, profile: bool):
         result = A * B
@@ -390,4 +555,3 @@ class PIM():
                 B[0][0][i*self.DRAM_column:(i+1)*self.DRAM_column]) for i in range(n-1)]
         lst.append(self.Vector_Vector_EWADD_Row(A[0][0][(n-1)*self.DRAM_column:], B[0][0][(n-1)*self.DRAM_column:]))
         return torch.cat(lst).reshape(A.shape)
-    

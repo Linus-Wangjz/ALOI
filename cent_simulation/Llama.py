@@ -13,7 +13,7 @@ class TransformerBlockLlama(TransformerBlock):
     """
     def __init__(self, dic_model, args):
         super().__init__(dic_model, args)
-        
+
     def precision_test(self):
         # Results are different in BFloat16 in 7B
         a = RMSNorm(self.x, self.SANorm)[0][0]
@@ -67,6 +67,168 @@ class TransformerBlockLlama(TransformerBlock):
         sa = self.x + sa
         return sa
     
+    def self_attention_aim_systolic_pim(self):
+        bsz, seqlen, _ = self.x.shape
+
+        RMSNorm_x = RMSNorm(self.x, self.SANorm)
+
+        # AiM MAC BK x GB
+        if self.pim_compute:
+            xq_aim = self.Vector_Matrix_Mul_weight_systolic_pim(RMSNorm_x[:,0,:], self.wq_row_index, self.dim, self.wq.shape[0], self.FC_total_banks, self.trace_fc_kqvo).reshape(bsz, 1, -1)
+            xk_aim = self.Vector_Matrix_Mul_weight_systolic_pim(RMSNorm_x[:,0,:], self.wk_row_index, self.dim, self.wk.shape[0], self.FC_total_banks, self.trace_fc_kqvo).reshape(bsz, 1, -1)
+            xv_aim = self.Vector_Matrix_Mul_weight_systolic_pim(RMSNorm_x[:,0,:], self.wv_row_index, self.dim, self.wv.shape[0], self.FC_total_banks, self.trace_fc_kqvo).reshape(bsz, 1, -1)
+        else:
+            wq_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.wq.shape, self.wq_row_index, self.mode["weights"], self.dic_shape["wq"][0], False)
+            wk_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.wk.shape, self.wk_row_index, self.mode["weights"], self.dic_shape["wk"][0], False)
+            wv_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.wv.shape, self.wv_row_index, self.mode["weights"], self.dic_shape["wv"][0], False)
+            xq_aim = F.linear(RMSNorm_x, wq_aim)
+            xk_aim = F.linear(RMSNorm_x, wk_aim)
+            xv_aim = F.linear(RMSNorm_x, wv_aim)
+        compare(xq_aim, self.xq, "Vector_Matrix_Mul xq")
+        compare(xk_aim, self.xk, "Vector_Matrix_Mul xk")
+        compare(xv_aim, self.xv, "Vector_Matrix_Mul xv")
+
+        xq_aim = xq_aim.reshape(bsz, 1, self.n_heads, self.head_dim)
+        xk_aim = xk_aim.reshape(bsz, 1, self.n_kv_heads, self.head_dim)
+        xv_aim = xv_aim.reshape(bsz, 1, self.n_kv_heads, self.head_dim)
+
+        xq_aim, xk_aim = apply_rotary_emb(xq_aim, xk_aim, self.freqs_cis)
+        xq_aim = xq_aim.transpose(1, 2) # (bsz, n_heads, 1, head_dim)
+
+        # [8, 76, 32, 128], start_pos = 75, seqlen = 1
+
+        if self.pim_compute:
+
+            # store xk
+            sequence_length = (self.start_pos + seqlen).item()
+            total_bursts = math.ceil(sequence_length / self.burst_length)
+            seq_iterations = math.ceil(total_bursts / self.FC_total_banks)
+            DRAM_rows_per_head = self.head_dim * self.burst_length // self.DRAM_column   # 2
+            bursts_per_DRAM_row = self.DRAM_column // self.burst_length
+            bank_index = (sequence_length - self.burst_length * self.FC_total_banks * (seq_iterations-1)) // self.burst_length
+            burst_index = (sequence_length - self.burst_length * self.FC_total_banks * (seq_iterations-1) - 1) % self.burst_length
+            channel = bank_index // self.num_banks
+            bank = bank_index % self.num_banks
+
+            for i in range(self.batch_size):
+                for kv_head in range(self.n_kv_heads):
+                    for DRAM_row in range(DRAM_rows_per_head):
+                        row_offset = i * seq_iterations * self.n_kv_heads * DRAM_rows_per_head + (seq_iterations-1) * self.n_kv_heads * DRAM_rows_per_head + kv_head * DRAM_rows_per_head + DRAM_row
+                        for burst in range(bursts_per_DRAM_row):
+                            self.store_to_DRAM_single_bank(channel // self.num_channels, channel % self.num_channels, bank, self.cache_k_row_index + row_offset, burst * self.burst_length + burst_index, 1, xk_aim[i, 0, kv_head, DRAM_row * bursts_per_DRAM_row + burst], self.trace_attention)
+
+            # store xv
+            num_banks_per_head_dim = self.head_dim // self.burst_length         # 8
+            heads_per_channel = self.num_banks // num_banks_per_head_dim        # 2
+            GQA = self.n_repeat
+            systolic_dim_padding = min(self.systolic_dim, GQA)
+            chunk_size = self.DRAM_column // systolic_dim_padding
+            chunks = (sequence_length - 1) // chunk_size + 1
+            pairs_of_kv_heads = self.n_kv_heads // heads_per_channel    # 4 in Llama-70B and 16 in Llama-7B
+            if self.channels_per_block < pairs_of_kv_heads:
+                paired_kv_head_per_channel = math.ceil(pairs_of_kv_heads / self.channels_per_block)
+                seqlen_iterations = 1
+            else:
+                paired_kv_head_per_channel = 1
+                seqlen_iterations = self.channels_per_block // pairs_of_kv_heads
+            channels_per_seqlen_iteration = math.ceil(pairs_of_kv_heads / paired_kv_head_per_channel)
+            channels_utilized = channels_per_seqlen_iteration * seqlen_iterations
+            chunks_per_seqlen_iteration = math.ceil(chunks / seqlen_iterations)
+            for batch_index in range(self.batch_size):
+                for channel_index in range(channels_utilized):
+                    dimm_index = channel_index // self.num_channels
+                    for paired_kv_head in range(paired_kv_head_per_channel):
+                        paired_kv_head_index = (channel_index * paired_kv_head_per_channel) % pairs_of_kv_heads + paired_kv_head
+                        for seqlen_iteration in range(seqlen_iterations):
+                            for chunk in range(chunks_per_seqlen_iteration):
+                                chunk_index = seqlen_iteration * chunks_per_seqlen_iteration + chunk
+                                if chunk_index == chunks-1:
+                                    seqlen_per_chunk = sequence_length - (chunks_per_seqlen_iteration - 1) * chunk_size
+                                    for bank_index in range(self.num_banks):
+                                        rows_per_chunk = math.ceil(seqlen_per_chunk * self.burst_length / self.DRAM_column)
+                                        row = rows_per_chunk - 1
+                                        row_len = seqlen_per_chunk * self.burst_length - row * self.DRAM_column
+                                        row_index_offset = batch_index * paired_kv_head_per_channel * seqlen_iterations * chunks_per_seqlen_iteration * rows_per_chunk + paired_kv_head * seqlen_iterations * chunks_per_seqlen_iteration * rows_per_chunk + seqlen_iteration * chunks_per_seqlen_iteration * rows_per_chunk + chunk * rows_per_chunk + row
+                                        data_per_bank_a = xv_aim[batch_index, 0, 2*paired_kv_head_index, bank_index * self.burst_length // 2: (bank_index + 1) * self.burst_length // 2]
+                                        data_per_bank_b = xv_aim[batch_index, 0, 2*paired_kv_head_index + 1, bank_index * self.burst_length // 2: (bank_index + 1) * self.burst_length // 2]
+                                        data_per_bank = torch.cat((data_per_bank_a, data_per_bank_b), dim=0)
+                                        self.store_to_DRAM_single_bank(dimm_index, channel_index % self.num_channels, bank_index, self.cache_v_row_index + row_index_offset, row_len - self.burst_length, self.burst_length, data_per_bank, self.trace_attention)
+
+            scores_aim = self.Vector_Matrix_Mul_score_systolic_pim(xq_aim[:,:,0], self.cache_k_row_index, self.trace_attention)
+
+            scores_aim = scores_aim / math.sqrt(self.head_dim)
+            scores = F.softmax(scores_aim, dim=-1).type_as(xq_aim)
+            compare(scores, self.scores, "scores")
+
+            output_aim = self.Vector_Matrix_Mul_output_pim_systolic_pim(scores[:,:,0], self.cache_v_row_index, self.trace_attention)
+
+        else:
+
+            cache_k_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.cache_k.shape, self.cache_k_row_index, self.mode["cache_k"], self.start_pos+seqlen, False)
+            cache_v_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.cache_v.shape, self.cache_v_row_index, self.mode["cache_v"], self.start_pos+seqlen, False)
+
+            cache_k_aim[:bsz, self.start_pos : self.start_pos + seqlen] = xk_aim
+            cache_v_aim[:bsz, self.start_pos : self.start_pos + seqlen] = xv_aim
+
+            self.store_to_DRAM_multi_channel_systolic_pim(cache_k_aim, self.cache_k_row_index, self.mode["cache_k"], False)
+            self.store_to_DRAM_multi_channel_systolic_pim(cache_v_aim, self.cache_v_row_index, self.mode["cache_v"], False)
+
+            keys_new = cache_k_aim[:bsz, : self.start_pos + seqlen]
+            values = cache_v_aim[:bsz, : self.start_pos + seqlen]
+            keys = keys_new
+            if self.GQA:
+                keys = repeat_kv(keys, self.n_repeat)
+                values = repeat_kv(values, self.n_repeat)
+            keys = keys.transpose(1, 2).transpose(2, 3)
+            values = values.transpose(1, 2)
+
+            scores = torch.matmul(xq_aim, keys) / math.sqrt(self.head_dim)
+            scores = F.softmax(scores, dim=-1).type_as(xq_aim)
+            compare(scores, self.scores, "scores")
+
+            output = torch.matmul(scores, values)  # (bs, n_local_heads, seqlen, head_dim)
+            output_aim = output.transpose(1, 2).contiguous().reshape(bsz, seqlen, -1)
+
+        compare(output_aim[0], self.output[0], "output")
+
+        # AiM MAC BK x GB
+        if self.pim_compute:
+            sa_aim = self.Vector_Matrix_Mul_weight_systolic_pim(output_aim[:,0,:], self.wo_row_index, self.dim, self.wo.shape[0], self.FC_total_banks, self.trace_fc_kqvo).reshape(bsz, 1, -1)
+        else:
+            wo_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.wo.shape, self.wo_row_index, self.mode["weights"], self.dic_shape["wo"][0], False)
+            sa_aim = F.linear(output_aim, wo_aim)
+        compare(sa_aim, self.sa, "Vector_Matrix_Mul sa")
+
+        sa = self.x + sa_aim
+        return sa
+
+    def FFN_aim_systolic_pim(self, sa):
+        bsz, seqlen, _ = self.x.shape
+        compare(sa, self.h, "h")
+        RMSNorm_sa = RMSNorm(sa, self.FFNNorm)
+        if self.pim_compute:
+            x1_aim = self.Vector_Matrix_Mul_weight_systolic_pim(RMSNorm_sa[:,0,:], self.w1_row_index, self.dim, self.w1.shape[0], self.FC_total_banks, self.trace_fc_ffn).reshape(bsz, 1, -1)
+            x3_aim = self.Vector_Matrix_Mul_weight_systolic_pim(RMSNorm_sa[:,0,:], self.w3_row_index, self.dim, self.w3.shape[0], self.FC_total_banks, self.trace_fc_ffn).reshape(bsz, 1, -1)
+        else:
+            w1_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.w1.shape, self.w1_row_index, self.mode["weights"], self.dic_shape["w1"][0], False)
+            w3_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.w3.shape, self.w3_row_index, self.mode["weights"], self.dic_shape["w3"][0], False)
+            x1_aim = F.linear(RMSNorm_sa, w1_aim)
+            x3_aim = F.linear(RMSNorm_sa, w3_aim)
+
+        x1x3 = F.silu(x1_aim) * x3_aim
+        ffn_dim = self.w2.shape[1]
+
+        if self.pim_compute:
+            ffn_aim = self.Vector_Matrix_Mul_weight_systolic_pim(x1x3[:,0,:], self.w2_row_index, ffn_dim, self.w2.shape[0], self.FC_total_banks, self.trace_fc_ffn).reshape(bsz, 1, -1)
+        else:
+            w2_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.w2.shape, self.w2_row_index, self.mode["weights"], self.dic_shape["w2"][0], False)
+            ffn_aim = F.linear(x1x3, w2_aim)
+
+        compare(ffn_aim, self.ffn, "ffn")
+        out = sa + ffn_aim
+        return out
+
+
     def self_attention_aim(self):
         bsz, _, _ = self.x.shape
         seqlen = self.start_pos.item() + 1
@@ -201,7 +363,7 @@ class TransformerBlockLlama(TransformerBlock):
             seq = seqlen - 1
             dimm_index, channel_index, bank_index = self.bank_index(seq % self.FC_total_banks)
             xk_data = xk_aim.reshape(-1)
-            rows = self.head_dim * self.n_kv_heads // self.DRAM_column
+            rows = (self.head_dim * self.n_kv_heads - 1) // self.DRAM_column + 1
             for row in range(rows):
                 data_row = xk_data[row * self.DRAM_column : (row + 1) * self.DRAM_column]
                 self.time["WR_SBK"] += self.timing_constant["WR_SBK"] + self.DRAM_column // self.burst_length
@@ -598,7 +760,7 @@ class TransformerBlockLlama(TransformerBlock):
         bsz, _, _ = self.x.shape
         seqlen = self.seqlen
         total_banks = self.total_banks
-        if self.model_parallel:
+        if self.model_parallel and not self.kv_head_tp:
             FC_total_banks = total_banks * self.FC_devices
             channels_required = self.num_channels
         else:
@@ -649,33 +811,66 @@ class TransformerBlockLlama(TransformerBlock):
         # K/Q/V GEMV
         if self.trace_fc_kqvo:
             self.Vector_Matrix_Mul_weight_pim_only_trace(channel_lst, self.wq_row_index, self.dim, self.head_dim * self.n_heads, FC_total_banks, "breakdown_sa_weight")
-            self.Vector_Matrix_Mul_weight_pim_only_trace(channel_lst, self.wk_row_index, self.dim, self.head_dim * self.n_kv_heads, FC_total_banks, "breakdown_sa_weight")
-            self.Vector_Matrix_Mul_weight_pim_only_trace(channel_lst, self.wv_row_index, self.dim, self.head_dim * self.n_kv_heads, FC_total_banks, "breakdown_sa_weight")
+            if self.kv_head_tp:
+                self.Vector_Matrix_Mul_kv_projection_pim_only_trace(
+                    self.wk_row_index,
+                    self.wv_row_index,
+                    self.dim,
+                    "breakdown_sa_weight",
+                )
+            else:
+                self.Vector_Matrix_Mul_weight_pim_only_trace(channel_lst, self.wk_row_index, self.dim, self.head_dim * self.n_kv_heads, FC_total_banks, "breakdown_sa_weight")
+                self.Vector_Matrix_Mul_weight_pim_only_trace(channel_lst, self.wv_row_index, self.dim, self.head_dim * self.n_kv_heads, FC_total_banks, "breakdown_sa_weight")
 
-            # CXL Port
-            # Store re-mapped xq/xk for EWMUL
-            self.time["WR_SBK"] += self.timing_constant["WR_SBK"] + self.dim * 2 // self.burst_length
-            self.store_for_EWMUL_input_only_trace(channels_required, input_vector_EWMUL_utilized_banks, 1, self.xq_row_index, input_vector_EWMUL_length * 2)
-            self.time["WR_SBK"] += self.timing_constant["WR_SBK"] + self.dim * 2 // self.burst_length
-            self.store_for_EWMUL_input_only_trace(channels_required, input_vector_EWMUL_utilized_banks, 1, self.xk_row_index, input_vector_EWMUL_length // self.n_repeat * 2)
-            # Rotary embedding
-            self.EWMUL_only_trace(channel_lst, self.xq_row_index, self.dim // self.burst_length)
-            self.EWMUL_only_trace(channel_lst, self.xk_row_index, self.dim // self.n_repeat // self.burst_length)
-            # Load rotary embedding results
-            self.time["RD_SBK"] += self.timing_constant["RD_SBK"] + self.dim * 2 // self.burst_length
-            self.store_for_EWMUL_input_only_trace(channels_required, input_vector_EWMUL_utilized_banks, 2, self.xq_row_index, input_vector_EWMUL_length * 2)
-            self.time["RD_SBK"] += self.timing_constant["RD_SBK"] + self.dim * 2 // self.burst_length
-            self.store_for_EWMUL_input_only_trace(channels_required, input_vector_EWMUL_utilized_banks, 2, self.xk_row_index, input_vector_EWMUL_length // self.n_repeat * 2)
+            # CXL Port / local scratchpad: remap local Q/K shards for RoPE.
+            q_dim = self.n_heads * self.head_dim
+            kv_dim = self.n_kv_heads * self.head_dim
+            q_ewmul_length = (q_dim - 1) // (total_banks // 4) + 1
+            kv_ewmul_length = (kv_dim - 1) // (total_banks // 4) + 1
+            q_ewmul_banks = (q_dim - 1) // q_ewmul_length + 1
+            kv_ewmul_banks = (kv_dim - 1) // kv_ewmul_length + 1
+            if not self.kv_head_tp:
+                self.time["WR_SBK"] += self.timing_constant["WR_SBK"] + q_dim * 2 // self.burst_length
+                self.store_for_EWMUL_input_only_trace(channels_required, q_ewmul_banks, 1, self.xq_row_index, q_ewmul_length * 2)
+                self.time["WR_SBK"] += self.timing_constant["WR_SBK"] + kv_dim * 2 // self.burst_length
+                self.store_for_EWMUL_input_only_trace(channels_required, kv_ewmul_banks, 1, self.xk_row_index, kv_ewmul_length * 2)
+                self.EWMUL_only_trace(channel_lst, self.xq_row_index, q_dim // self.burst_length)
+                self.EWMUL_only_trace(channel_lst, self.xk_row_index, kv_dim // self.burst_length)
+                self.time["RD_SBK"] += self.timing_constant["RD_SBK"] + q_dim * 2 // self.burst_length
+                self.store_for_EWMUL_input_only_trace(channels_required, q_ewmul_banks, 2, self.xq_row_index, q_ewmul_length * 2)
+                self.time["RD_SBK"] += self.timing_constant["RD_SBK"] + kv_dim * 2 // self.burst_length
+                self.store_for_EWMUL_input_only_trace(channels_required, kv_ewmul_banks, 2, self.xk_row_index, kv_ewmul_length * 2)
 
-        if self.trace_attention:
+        if self.trace_attention and self.kv_head_tp:
+            self.trace_kv_head_cache_update(
+                self.cache_k_row_index,
+                self.cache_v_row_index,
+                seqlen - 1,
+            )
+            self.Vector_Matrix_Mul_score_pim_only_trace(
+                self.cache_k_row_index,
+                seqlen,
+                "breakdown_sa_score",
+            )
+
+        if self.trace_attention and not self.kv_head_tp:
             # Store xk
             seq = seqlen - 1
             dimm_index, channel_index, bank_index = self.bank_index(seq % self.FC_total_banks)
-            rows = self.head_dim * self.n_kv_heads // self.DRAM_column
+            rows = (self.head_dim * self.n_kv_heads - 1) // self.DRAM_column + 1
             for row in range(rows):
-                self.time["WR_SBK"] += self.timing_constant["WR_SBK"] + self.DRAM_column // self.burst_length
+                row_elements = min(
+                    self.DRAM_column,
+                    self.head_dim * self.n_kv_heads - row * self.DRAM_column,
+                )
+                self.time["WR_SBK"] += self.timing_constant["WR_SBK"] + row_elements // self.burst_length
                 for tb in range(num_transformer_blocks_per_device):
-                    self.W_MEM_only_trace(channel_index + tb * channels_required, bank_index, self.cache_k_row_index + seq // self.FC_total_banks * rows + row, self.DRAM_column)
+                    self.W_MEM_only_trace(
+                        channel_index + tb * channels_required,
+                        bank_index,
+                        self.cache_k_row_index + seq // self.FC_total_banks * rows + row,
+                        row_elements,
+                    )
             # Store xv
             if self.intra_device_attention:
                 num_rows_per_seq = (seq - 1) // self.DRAM_column + 1
@@ -733,7 +928,7 @@ class TransformerBlockLlama(TransformerBlock):
             # Query x key_cache GEMV
             self.Vector_Matrix_Mul_score_pim_only_trace(self.cache_k_row_index, seqlen, "breakdown_sa_score")
 
-        if self.trace_softmax:
+        if self.trace_softmax and not self.kv_head_tp:
             
         #     self.store_for_score_only_trace(self.scores_row_index, self.FC_total_banks, seqlen)
         #     self.SYNC_only_trace()
@@ -748,6 +943,17 @@ class TransformerBlockLlama(TransformerBlock):
             self.time["WR_SBK"] += self.timing_constant["WR_SBK"] * rows_per_score + seqlen // self.burst_length
             self.store_for_EWMUL_score_only_trace(channels_required, self.scores_row_index, total_banks, 1, seqlen)
 
+            # Scale score. KV-head TP only activates channels that own local
+            # query-head score banks; other channels must not receive PIM
+            # commands merely because the physical device has spare banks.
+            score_channel_lst = channel_lst
+            if self.kv_head_tp:
+                score_channels = min(
+                    channels_required,
+                    (self.n_heads - 1) // (self.num_banks // 4) + 1,
+                )
+                score_channel_lst = list(range(score_channels))
+
             # Scale score
             num_scores_per_bank = (self.n_heads - 1) // (self.channels_per_block * 4) + 1
             for score_index in range(num_scores_per_bank):
@@ -756,7 +962,7 @@ class TransformerBlockLlama(TransformerBlock):
                         offset = seqlen - row * self.DRAM_column
                     else:
                         offset = self.DRAM_column
-                    self.EWMUL_only_trace(channel_lst, self.scores_row_index + score_index * rows_per_score + row, (offset - 1) // self.burst_length + 1)
+                    self.EWMUL_only_trace(score_channel_lst, self.scores_row_index + score_index * rows_per_score + row, (offset - 1) // self.burst_length + 1)
             
             # CXL Port write mean of sum(exp)
             self.time["RD_SBK"] += self.timing_constant["RD_SBK"] * rows_per_score + seqlen // self.burst_length
@@ -774,7 +980,7 @@ class TransformerBlockLlama(TransformerBlock):
                         offset = seqlen - row * self.DRAM_column
                     else:
                         offset = self.DRAM_column
-                    self.EWMUL_only_trace(channel_lst, self.scores_row_index + score_index * rows_per_score + row, (offset - 1) // self.burst_length + 1)
+                    self.EWMUL_only_trace(score_channel_lst, self.scores_row_index + score_index * rows_per_score + row, (offset - 1) // self.burst_length + 1)
 
             self.time["RD_SBK"] += self.timing_constant["RD_SBK"] * rows_per_score + seqlen // self.burst_length
             self.load_from_EWMUL_score_only_trace(channels_required, self.scores_row_index, total_banks, 2, seqlen)
@@ -786,7 +992,8 @@ class TransformerBlockLlama(TransformerBlock):
 
         # Output GEMV
         if self.trace_fc_kqvo:
-            self.Vector_Matrix_Mul_weight_pim_only_trace(channel_lst, self.wo_row_index, self.dim, self.dim, FC_total_banks, "breakdown_sa_weight")
+            wo_input_dim = self.n_heads * self.head_dim if self.kv_head_tp else self.dim
+            self.Vector_Matrix_Mul_weight_pim_only_trace(channel_lst, self.wo_row_index, wo_input_dim, self.dim, FC_total_banks, "breakdown_sa_weight")
         if self.trace_norm:
             self.EWADD_only_trace(self.dim // self.burst_length)
 
@@ -799,7 +1006,7 @@ class TransformerBlockLlama(TransformerBlock):
             self.MAC_ABK_only_trace(channel_lst, self.sa_copy_row_index, (input_vector_neighbor_bank_length - 1) // self.burst_length + 1, "breakdown_sa_pow")
             self.RD_MAC_only_trace(channel_lst)
 
-            # CXL Port  
+            # CXL Port
             # Reduction of dim // 16 intermidiate sum read from MAC
             # Broadcast a scalar to vector and store it for EWMUL
             self.time["WR_SBK"] += self.timing_constant["WR_SBK"] + self.dim // self.burst_length
@@ -889,10 +1096,13 @@ class TransformerBlockLlama(TransformerBlock):
             self.EWADD_only_trace(self.dim // self.burst_length)
 
     def trace_only_embedding(self):
+        if self.systolic_pim:
+            return self.trace_only_embedding_systolic_PIM()
+
         bsz, _, _ = self.x.shape
         seqlen = self.seqlen
         total_banks = self.total_banks
-        if self.model_parallel:
+        if self.model_parallel and not self.kv_head_tp:
             FC_total_banks = total_banks * self.FC_devices
             channels_required = self.num_channels
         else:
@@ -935,11 +1145,62 @@ class TransformerBlockLlama(TransformerBlock):
 
         self.Vector_Matrix_Mul_weight_pim_only_trace(channel_lst, self.wo_row_index, self.dim, self.vocab_size, FC_total_banks, "breakdown_embedding_weight")
 
-    def trace_only_FC(self):
+    def trace_only_embedding_systolic_PIM(self):
         bsz, _, _ = self.x.shape
         seqlen = self.seqlen
         total_banks = self.total_banks
         if self.model_parallel:
+            FC_total_banks = total_banks * self.FC_devices
+            channels_required = self.num_channels
+        else:
+            FC_total_banks = total_banks
+            channels_required = self.channels_per_block
+        channel_multi_transformer_block_required = self.num_channels // channels_required * channels_required
+        channel_lst = [channel for channel in range(channel_multi_transformer_block_required)]
+
+        self.Vector_Matrix_Mul_weight_systolic_pim_only_trace(
+            channel_lst, self.wq_row_index, self.vocab_size, self.dim
+        )
+        # output embedding
+
+        for i in range(self.batch_size):
+
+            # RMSNorm   x.pow   MAC_ABK
+            input_vector_MAB_BK_BK_length = (self.dim - 1) // (total_banks // 2) + 1
+            self.WR_BIAS_only_trace(channel_lst)
+            self.MAC_ABK_only_trace(channel_lst, self.x_row_index, (input_vector_MAB_BK_BK_length - 1) // self.burst_length + 1)
+            self.RD_MAC_only_trace(channel_lst)
+
+            # CXL Port
+            # Reduction of dim // 16 intermidiate sum read from MAC
+            # Broadcast a scalar to vector and store it for EWMUL
+            input_vector_EWMUL_length = (self.dim - 1) // (total_banks // 4) + 1
+            input_vector_EWMUL_utilized_banks = (self.dim - 1) // input_vector_EWMUL_length + 1
+            self.store_for_EWMUL_input_only_trace(channels_required, input_vector_EWMUL_utilized_banks, 1, self.x_copy_row_index, input_vector_EWMUL_length)
+
+            # RMSNorm   EWMUL
+            self.EWMUL_only_trace(channel_lst, self.x_copy_row_index, (input_vector_EWMUL_length - 1) // self.burst_length + 1)
+
+            for bank in range(self.num_banks):
+                bank_group_index = 2
+                if bank % 4 == bank_group_index:
+                    self.COPY_BK_GB_only_trace(channel_lst, bank, self.x_copy_row_index, (input_vector_EWMUL_length - 1) // self.burst_length + 1)
+                    self.COPY_GB_BK_only_trace(channel_lst, bank-1, self.SANorm_row_index, (input_vector_EWMUL_length - 1) // self.burst_length + 1)
+            self.EWMUL_only_trace(channel_lst, self.SANorm_row_index, (input_vector_EWMUL_length - 1) // self.burst_length + 1)
+
+            # Read RMSNorm result vector to GPR
+            self.load_from_EWMUL_input_only_trace(channels_required, input_vector_EWMUL_utilized_banks, 2, self.SANorm_row_index, input_vector_EWMUL_length)
+            self.SYNC_only_trace()
+
+        self.Vector_Matrix_Mul_weight_systolic_pim_only_trace(
+            channel_lst, self.wq_row_index, self.dim, self.vocab_size
+        )
+
+    def trace_only_FC(self):
+        bsz, _, _ = self.x.shape
+        seqlen = self.seqlen
+        total_banks = self.total_banks
+        if self.model_parallel and not self.kv_head_tp:
             FC_total_banks = total_banks * self.FC_devices
             channels_required = self.num_channels
         else:
@@ -965,6 +1226,270 @@ class TransformerBlockLlama(TransformerBlock):
 
         # w2 FFN GEMV
         self.Vector_Matrix_Mul_weight_pim_only_trace(channel_lst, self.w2_row_index, ffn_dim, self.dim, FC_total_banks, "breakdown_ffn_weight")
+
+    def trace_only_systolic_PIM(self):
+        if self.kv_head_tp:
+            return self.trace_only_systolic_TP()
+
+        seqlen = self.seqlen
+        if self.model_parallel:
+            channels_required = self.num_channels
+        else:
+            channels_required = self.channels_per_block
+        channel_multi_transformer_block_required = self.num_channels // channels_required * channels_required
+        channel_lst = [channel for channel in range(channels_required)] if self.single_tb_per_device else [channel for channel in range(channel_multi_transformer_block_required)]
+        num_transformer_blocks_per_device = 1 if self.single_tb_per_device else max(self.num_channels // channels_required, 1)
+        # batch_iteration = (self.batch_size - 1) // self.systolic_dim + 1
+
+        # Move to RMSNorm to PNM
+        # RMSNorm   x.pow.mean()   MAC_ABK  self.dim
+        # RMSNorm   division, add already at PNM
+        # RMSNorm   EWMUL   self.dim
+        # RMSNorm   EWMUL   self.dim
+
+        # K/Q/V GEMV
+        if self.trace_fc_kqvo:
+            # for i in range(batch_iteration):
+            self.Vector_Matrix_Mul_weight_systolic_pim_only_trace(channel_lst, self.wq_row_index, self.dim, self.head_dim * self.n_heads)
+            self.Vector_Matrix_Mul_weight_systolic_pim_only_trace(channel_lst, self.wk_row_index, self.dim, self.head_dim * self.n_kv_heads)
+            self.Vector_Matrix_Mul_weight_systolic_pim_only_trace(channel_lst, self.wv_row_index, self.dim, self.head_dim * self.n_kv_heads)
+
+        # Move Rotary embedding to PNM
+        # EWMUL self.dim // self.burst_length
+        # EWMUL self.dim // self.n_repeat // self.burst_length
+
+        if self.trace_attention:
+            for i in range(self.batch_size):
+                # Store xk
+                # For a new token, store 128 x 8 KV heads to a single bank. 16 tokens (a burst) x 128 head dim requires 2 DRAM rows. Store new xk to this bank requires 16 DRAM rows, storing a single value to each burst.
+                seq = seqlen - 1
+                burst_index = (seq - 1) // self.burst_length + 1
+                dimm_index, channel_index, bank_index = self.bank_index(burst_index % self.FC_total_banks)
+                num_DRAM_rows_per_kv_head = self.head_dim * self.burst_length // self.DRAM_column
+                for head in range(self.n_kv_heads):
+                    for dim in range(self.head_dim):
+                        row_offset = head * num_DRAM_rows_per_kv_head + dim * self.burst_length // self.DRAM_column
+                        # col_index = dim * self.burst_length % self.DRAM_column
+                        self.W_MEM_only_trace(channel_index, bank_index, self.cache_k_row_index + row_offset, 1)
+
+                # Store xv
+                # Constant
+                num_banks_per_head_dim = self.head_dim // self.burst_length                                 # 8
+                seqlen_iterations_per_chunk = (self.num_banks - 1) // num_banks_per_head_dim + 1            # 2
+                num_bursts_per_DRAM_row = self.DRAM_column // self.burst_length                             # 64
+                # Variable
+                GQA = self.n_repeat
+                padding_length = min(self.systolic_dim, GQA)
+                chunk_size = self.DRAM_column // padding_length                 # 1K / 8 = 128
+                chunks = (seqlen - 1) // chunk_size + 1                         # 4K / 128 = 32
+                if self.channels_per_block < self.n_kv_heads:
+                    kv_head_iterations = (self.n_kv_heads - 1) // self.channels_per_block + 1
+                    chunks = chunks * kv_head_iterations
+                else:
+                    seqlen_iterations_all_channels = (self.channels_per_block - 1) // self.n_kv_heads + 1
+                    chunks = (chunks - 1) // seqlen_iterations_all_channels + 1
+                num_bursts_per_seqlen_iteration = (chunk_size - 1) // seqlen_iterations_per_chunk + 1       # 64
+                num_DRAM_rows_per_seqlen_iteration = (num_bursts_per_seqlen_iteration - 1) // num_bursts_per_DRAM_row + 1
+                row_offset = seqlen // chunk_size * num_DRAM_rows_per_seqlen_iteration * seqlen_iterations_per_chunk +  seqlen % chunk_size % self.head_dim
+                for channel_index in range(channels_required):
+                    for bank_index in range(self.num_banks):
+                        self.W_MEM_only_trace(channel_index, bank_index, self.cache_v_row_index + row_offset, self.burst_length)
+
+            if self.flash_attention:
+                self.Vector_Matrix_Mul_flash_attention_pim_only_trace(self.cache_k_row_index, self.cache_v_row_index, seqlen)
+            else:
+                # Query x key_cache GEMV
+                self.Vector_Matrix_Mul_score_systolic_pim_only_trace(self.cache_k_row_index, seqlen)
+                for _ in range(self.batch_size):
+                    self.store_for_score_only_trace(self.scores_row_index, self.FC_total_banks, seqlen)
+                    self.SYNC_only_trace()
+                    self.load_for_score_only_trace(self.scores_row_index, self.FC_total_banks, seqlen)
+                    self.SYNC_only_trace()
+                # Score x value_cache GEMV
+                self.Vector_Matrix_Mul_output_systolic_pim_only_trace(self.cache_v_row_index, seqlen)
+
+        if self.trace_score and not self.trace_attention:
+            if self.flash_attention:
+                self.Vector_Matrix_Mul_flash_attention_pim_only_trace(self.cache_k_row_index, self.cache_v_row_index, seqlen)
+            else:
+                # Query x key_cache GEMV
+                self.Vector_Matrix_Mul_score_systolic_pim_only_trace(self.cache_k_row_index, seqlen)
+
+        if self.trace_fc_kqvo:
+            # for i in range(batch_iteration):
+            self.Vector_Matrix_Mul_weight_systolic_pim_only_trace(channel_lst, self.wo_row_index, self.head_dim * self.n_heads, self.dim)
+
+        if self.trace_norm:
+            self.EWADD_only_trace(self.dim // self.burst_length)
+
+        # Move the second RMSNorm and activation work to PNM.
+        ffn_dim = self.w1.shape[0]
+        if self.trace_fc_ffn:
+            self.Vector_Matrix_Mul_weight_systolic_pim_only_trace(
+                channel_lst, self.w1_row_index, self.dim, ffn_dim, True
+            )
+            self.Vector_Matrix_Mul_weight_systolic_pim_only_trace(
+                channel_lst, self.w3_row_index, self.dim, ffn_dim
+            )
+            self.Vector_Matrix_Mul_weight_systolic_pim_only_trace(
+                channel_lst, self.w2_row_index, ffn_dim, self.dim
+            )
+            for _ in range(self.active_experts - 1):
+                self.EWADD_only_trace(self.dim // self.burst_length)
+
+        if self.trace_norm:
+            self.EWADD_only_trace(self.dim // self.burst_length)
+
+    def trace_only_systolic_TP(self):
+        """Trace standard KV-head TP with the systolic physical layout."""
+
+        layout = self.systolic_tp_layout
+        if layout is None:
+            raise ValueError("standard systolic TP layout is not enabled")
+        seqlen = self.seqlen
+
+        # RMSNorm and RoPE stay on the local PNM/RV path.  Projection partials
+        # are reduced across channel groups by the device-local PNM model.
+        if self.trace_fc_kqvo:
+            self.Vector_Matrix_Mul_weight_systolic_tp_only_trace(
+                layout.q, self.wq_row_index, "breakdown_sa_weight"
+            )
+            self.Vector_Matrix_Mul_weight_systolic_tp_only_trace(
+                layout.kv, self.wk_row_index, "breakdown_sa_weight"
+            )
+
+        if self.trace_attention:
+            for batch_index in range(self.batch_size):
+                self.trace_systolic_tp_cache_update(
+                    self.cache_k_row_index,
+                    self.cache_v_row_index,
+                    seqlen - 1,
+                    batch_index,
+                )
+
+            k_rows_per_batch, v_rows_per_batch = (
+                self.systolic_tp_cache_rows_per_batch()
+            )
+            for batch_index in range(self.batch_size):
+                k_batch_base = (
+                    self.cache_k_row_index + batch_index * k_rows_per_batch
+                )
+                v_batch_base = (
+                    self.cache_v_row_index + batch_index * v_rows_per_batch
+                )
+                if self.flash_attention:
+                    blocks = math.ceil(seqlen / self.flash_attention_block_size)
+                    for block in range(blocks):
+                        block_seqlen = min(
+                            self.flash_attention_block_size,
+                            seqlen - block * self.flash_attention_block_size,
+                        )
+                        self.Vector_Matrix_Mul_score_systolic_tp_only_trace(
+                            k_batch_base, block_seqlen
+                        )
+                        self.store_for_score_only_trace(
+                            self.scores_row_index,
+                            self.FC_total_banks,
+                            block_seqlen,
+                        )
+                        self.SYNC_only_trace()
+                        self.load_for_score_only_trace(
+                            self.scores_row_index,
+                            self.FC_total_banks,
+                            block_seqlen,
+                        )
+                        self.SYNC_only_trace()
+                        self.Vector_Matrix_Mul_output_systolic_tp_only_trace(
+                            v_batch_base, block_seqlen
+                        )
+                else:
+                    self.Vector_Matrix_Mul_score_systolic_tp_only_trace(
+                        k_batch_base, seqlen
+                    )
+                    self.store_for_score_only_trace(
+                        self.scores_row_index, self.FC_total_banks, seqlen
+                    )
+                    self.SYNC_only_trace()
+                    self.load_for_score_only_trace(
+                        self.scores_row_index, self.FC_total_banks, seqlen
+                    )
+                    self.SYNC_only_trace()
+                    self.Vector_Matrix_Mul_output_systolic_tp_only_trace(
+                        v_batch_base, seqlen
+                    )
+        elif self.trace_score:
+            k_rows_per_batch, _ = self.systolic_tp_cache_rows_per_batch()
+            for batch_index in range(self.batch_size):
+                self.Vector_Matrix_Mul_score_systolic_tp_only_trace(
+                    self.cache_k_row_index + batch_index * k_rows_per_batch,
+                    seqlen,
+                )
+
+        if self.trace_fc_kqvo:
+            self.Vector_Matrix_Mul_weight_systolic_tp_only_trace(
+                layout.wo, self.wo_row_index, "breakdown_sa_weight"
+            )
+
+        # The first full-hidden-vector TP all-reduce is modeled by run_sim.
+        if self.trace_norm:
+            self.EWADD_only_trace(self.dim // self.burst_length)
+
+        if self.trace_fc_ffn:
+            self.Vector_Matrix_Mul_weight_systolic_tp_only_trace(
+                layout.fused_ffn,
+                self.w1_row_index,
+                "breakdown_ffn_weight",
+            )
+            # SiLU(W1) * W3 is a PNM operation over the local FFN shard.
+            self.SYNC_only_trace()
+            self.Vector_Matrix_Mul_weight_systolic_tp_only_trace(
+                layout.w2, self.w2_row_index, "breakdown_ffn_weight"
+            )
+
+        # The second full-hidden-vector TP all-reduce is modeled by run_sim.
+        if self.trace_norm:
+            self.EWADD_only_trace(self.dim // self.burst_length)
+
+    def DRAM_rows_required_for_weight_matrix(self, shape):
+        matrix_cols = shape[0]
+        matrix_rows = shape[1]
+        matrix_cols_per_bank = math.ceil(matrix_cols / self.FC_total_banks)
+        banks_per_matrix_col = math.ceil(self.burst_length / matrix_cols_per_bank)
+        # print("matrix_cols", matrix_cols, "matrix_rows", matrix_rows, "total banks", self.FC_total_banks, "matrix_cols_per_bank", matrix_cols_per_bank, "banks_per_matrix_col", banks_per_matrix_col)
+        matrix_cols_per_bank = max(matrix_cols_per_bank, self.burst_length)
+        bursts_of_matrix_cols_per_bank = math.ceil(matrix_cols_per_bank / self.burst_length)
+        matrix_cols_per_bank_padding = bursts_of_matrix_cols_per_bank * self.burst_length  # round up to multiple of burst_length
+        bursts_per_DRAM_row = self.DRAM_column // self.burst_length
+        assert matrix_rows // banks_per_matrix_col * self.burst_length >= self.DRAM_column, "Each bank has more than one row of data"
+        GQA = self.n_repeat
+        # padding_length = min(self.systolic_dim, GQA)
+        padding_length = self.systolic_dim
+
+        if banks_per_matrix_col > 1:    # Partition matrix_rows into banks
+            banks_per_matrix_row = matrix_cols // self.burst_length
+            banks_per_matrix_col = self.FC_total_banks // banks_per_matrix_row
+            utilized_banks = banks_per_matrix_row * banks_per_matrix_col
+            matrix_rows_per_bank = math.ceil(matrix_rows / banks_per_matrix_col)
+            bursts_per_bank = math.ceil(matrix_rows_per_bank * matrix_cols_per_bank_padding / self.burst_length)
+            DRAM_rows_per_bank = math.ceil(bursts_per_bank / bursts_per_DRAM_row)
+        else:   # Keep all matrix_rows in a single bank, >=1 burst per bank
+            utilized_banks = math.ceil(matrix_cols / matrix_cols_per_bank_padding)
+            matrix_rows_per_bank = math.ceil(matrix_rows / banks_per_matrix_col)
+            banks_per_matrix_row = utilized_banks
+            bursts_per_bank = math.ceil(matrix_rows_per_bank * matrix_cols_per_bank_padding / self.burst_length)
+            DRAM_rows_per_burst_block = math.ceil(matrix_rows_per_bank / bursts_per_DRAM_row)
+            DRAM_rows_per_bank = DRAM_rows_per_burst_block * bursts_of_matrix_cols_per_bank
+        return DRAM_rows_per_bank
+
+    def DRAM_rows_required_for_systolic_tp_projection(self, projection):
+        """Rows per bank for the standard TP projection's physical tiles."""
+
+        rows_per_tile = math.ceil(
+            projection.reduction_slice
+            * self.burst_length
+            / self.DRAM_column
+        )
+        return rows_per_tile * projection.output_tiles
 
     def memory_mapping(self):
         """
@@ -995,13 +1520,13 @@ class TransformerBlockLlama(TransformerBlock):
         self.dic_size["x"] = self.x.reshape(-1).shape[0]
         self.dic_row["x"] = (self.dic_size["x"] // self.num_banks - 1) // self.DRAM_column + 1
         total_banks = self.total_banks
-        if self.model_parallel:
+        if self.model_parallel and not self.kv_head_tp:
             FC_total_banks = total_banks * self.FC_devices
             channels_required = self.num_channels
         else:
             FC_total_banks = total_banks
             channels_required = self.channels_per_block
-        assert self.dic_size["x"] == self.dim
+        assert self.dic_size["x"] == self.dim * self.batch_size
         # print("x\t\t\t {} x {}\t\t\t requires {} rows".format(1, self.dic_size["x"], self.dic_row["x"]))
         # print("x_copy\t\t {} x {}\t\t\t requires {} rows".format(1, self.dic_size["x"], self.dic_row["x"]))
         # print("SANorm\t\t {} x {}\t\t\t requires {} rows".format(1, self.dic_size["x"], self.dic_row["x"]))
@@ -1009,53 +1534,102 @@ class TransformerBlockLlama(TransformerBlock):
 
         self.dic_size["wq"] = self.wq.reshape(-1).shape[0]
         assert self.dic_size["wq"] == self.n_heads * self.head_dim * self.dim
-        self.dic_row["wq"] = ((self.wq.shape[0] - 1) // FC_total_banks + 1) * ((self.wq.shape[1] - 1) // self.DRAM_column + 1)
+        if self.systolic_tp_layout is not None:
+            self.dic_row["wq"] = self.DRAM_rows_required_for_systolic_tp_projection(
+                self.systolic_tp_layout.q
+            )
+        else:
+            self.dic_row["wq"] = self.DRAM_rows_required_for_weight_matrix(self.wq.shape) if self.systolic_pim else ((self.wq.shape[0] - 1) // FC_total_banks + 1) * ((self.wq.shape[1] - 1) // self.DRAM_column + 1)
         # print("wq\t\t\t {} x {} x {}\t requires {} rows".format(self.n_heads, self.dim, self.head_dim, self.dic_row["wq"]))
         self.dic_size["wk"] = self.wk.reshape(-1).shape[0]
 
         assert self.dic_size["wk"] == self.n_kv_heads * self.head_dim * self.dim
-        self.dic_row["wk"] = ((self.wk.shape[0] - 1) // FC_total_banks + 1) * ((self.wk.shape[1] - 1) // self.DRAM_column + 1)
+        if self.systolic_tp_layout is not None:
+            # K and V columns share one fused physical region.
+            self.dic_row["wk"] = self.DRAM_rows_required_for_systolic_tp_projection(
+                self.systolic_tp_layout.kv
+            )
+        elif self.kv_head_tp:
+            kv_projection_banks = (
+                self.kv_head_layout.kv_projection_channels_per_operand
+                * self.num_banks
+            )
+            self.dic_row["wk"] = (
+                (self.wk.shape[0] - 1) // kv_projection_banks + 1
+            ) * ((self.wk.shape[1] - 1) // self.DRAM_column + 1)
+        else:
+            self.dic_row["wk"] = self.DRAM_rows_required_for_weight_matrix(self.wk.shape) if self.systolic_pim else ((self.wk.shape[0] - 1) // FC_total_banks + 1) * ((self.wk.shape[1] - 1) // self.DRAM_column + 1)
         # print("wk\t\t\t {} x {} x {} \t requires {} rows".format(self.n_heads, self.dim, self.head_dim, self.dic_row["wk"]))
         self.dic_size["wv"] = self.wv.reshape(-1).shape[0]
         assert self.dic_size["wv"] == self.n_kv_heads * self.head_dim * self.dim
-        self.dic_row["wv"] = ((self.wv.shape[0] - 1) // FC_total_banks + 1) * ((self.wv.shape[1] - 1) // self.DRAM_column + 1)
+        if self.systolic_tp_layout is not None:
+            self.dic_row["wv"] = 0
+        elif self.kv_head_tp:
+            self.dic_row["wv"] = (
+                (self.wv.shape[0] - 1) // kv_projection_banks + 1
+            ) * ((self.wv.shape[1] - 1) // self.DRAM_column + 1)
+        else:
+            self.dic_row["wv"] = self.DRAM_rows_required_for_weight_matrix(self.wv.shape) if self.systolic_pim else ((self.wv.shape[0] - 1) // FC_total_banks + 1) * ((self.wv.shape[1] - 1) // self.DRAM_column + 1)
         # print("wv\t\t\t {} x {} x {} \t requires {} rows".format(self.n_heads, self.dim, self.head_dim, self.dic_row["wv"]))
 
         self.dic_row["xq"] = 1
         self.dic_row["xk"] = 1
         self.dic_row["xv"] = 1
 
-        self.dic_size["cache_k"] = self.max_seq_len * self.n_kv_heads * self.head_dim
-        assert self.cache_k.reshape(-1).shape[0] == (self.start_pos + 1) * self.n_kv_heads * self.head_dim
-        self.dic_row["cache_k"] = ((self.max_seq_len - 1) // self.FC_total_banks + 1) * ((self.n_kv_heads * self.head_dim - 1) // self.DRAM_column + 1)
+        self.dic_size["cache_k"] = self.max_seq_len * self.n_kv_heads * self.head_dim * self.batch_size
+        assert self.cache_k.reshape(-1).shape[0] == (self.start_pos + 1) * self.n_kv_heads * self.head_dim * self.batch_size
+        if self.kv_head_tp:
+            self.dic_row["cache_k"] = (
+                self.kv_head_layout.k_rows_per_bank * self.batch_size
+            )
+        else:
+            self.dic_row["cache_k"] = ((self.max_seq_len - 1) // self.FC_total_banks + 1) * ((self.n_kv_heads * self.head_dim - 1) // self.DRAM_column + 1) * self.batch_size
         # print("cache_k\t\t {} x {} x {}\t\t requires {} rows".format(self.n_kv_heads, self.head_dim, "L", self.dic_row["cache_k"]))
 
-        self.dic_size["scores"] = self.max_seq_len * self.n_kv_heads
-        assert self.scores.reshape(-1).shape[0] == (self.start_pos + 1) * self.n_heads
+        self.dic_size["scores"] = self.max_seq_len * self.n_heads * self.batch_size
+        assert self.scores.reshape(-1).shape[0] == (self.start_pos + 1) * self.n_heads * self.batch_size
         num_heads_per_bank = (self.n_heads - 1) // (self.channels_per_block * 4) + 1
         self.dic_row["scores"] = ((self.max_seq_len - 1) // self.DRAM_column + 1) * num_heads_per_bank
         # print("scores\t\t {} x {} x {}\t\t\t requires {} rows".format(self.n_heads, 1, "L", self.dic_row["scores"]))
 
-        self.dic_size["cache_v"] = self.max_seq_len * self.n_kv_heads * self.head_dim
-        assert self.cache_v.reshape(-1).shape[0] == (self.start_pos + 1) * self.n_kv_heads * self.head_dim
-        if self.intra_device_attention:
-            self.dic_row["cache_v"] = ((self.max_seq_len - 1) // self.DRAM_column + 1) * ((self.n_kv_heads - 1) // self.channels_per_block + 1) * ((self.head_dim - 1) // self.num_banks + 1)
+        self.dic_size["cache_v"] = self.max_seq_len * self.n_kv_heads * self.head_dim * self.batch_size
+        assert self.cache_v.reshape(-1).shape[0] == (self.start_pos + 1) * self.n_kv_heads * self.head_dim * self.batch_size
+        if self.systolic_tp_layout is not None:
+            sv_layout = self.systolic_tp_layout.sv(self.max_seq_len)
+            self.dic_row["cache_v"] = math.ceil(
+                sv_layout.contexts_per_half
+                * self.burst_length
+                / self.DRAM_column
+            ) * self.batch_size
+        elif self.kv_head_tp:
+            self.dic_row["cache_v"] = (
+                self.kv_head_layout.v_rows_per_bank * self.batch_size
+            )
+        elif self.intra_device_attention:
+            self.dic_row["cache_v"] = ((self.max_seq_len - 1) // self.DRAM_column + 1) * ((self.n_kv_heads - 1) // self.channels_per_block + 1) * ((self.head_dim - 1) // self.num_banks + 1) * self.batch_size
         else:
             num_banks_per_head = (FC_total_banks - 1) // self.n_kv_heads + 1
-            self.dic_row["cache_v"] = (self.max_seq_len - 1) // (self.DRAM_column * num_banks_per_head // self.head_dim) + 1
+            self.dic_row["cache_v"] = ((self.max_seq_len - 1) // (self.DRAM_column * num_banks_per_head // self.head_dim) + 1) * self.batch_size
         # print("cache_v\t\t {} x {} x {}\t\t requires {} rows".format(self.n_kv_heads, "L", self.head_dim, self.dic_row["cache_v"]))
 
         self.dic_size["output"] = self.output.reshape(-1).shape[0]
-        assert self.dic_size["output"] == self.n_heads * self.head_dim
+        assert self.dic_size["output"] == self.n_heads * self.head_dim * self.batch_size
         self.dic_row["output"] = (self.dic_size["output"] // total_banks - 1) // self.DRAM_column + 1
         # print("output\t\t {} x {}\t\t\t requires {} rows".format(1, self.n_heads * self.head_dim, self.dic_row["output"]))
 
         self.dic_size["wo"] = self.wo.reshape(-1).shape[0]
         assert self.dic_size["wo"] == self.n_heads * self.head_dim * self.dim
-        self.dic_row["wo"] = ((self.wo.shape[0] - 1) // FC_total_banks + 1) * ((self.wo.shape[1] - 1) // self.DRAM_column + 1)
+        if self.systolic_tp_layout is not None:
+            self.dic_row["wo"] = self.DRAM_rows_required_for_systolic_tp_projection(
+                self.systolic_tp_layout.wo
+            )
+        else:
+            self.dic_row["wo"] = self.DRAM_rows_required_for_weight_matrix(self.wo.shape) if self.systolic_pim else ((self.wo.shape[0] - 1) // FC_total_banks + 1) * ((self.wo.shape[1] - 1) // self.DRAM_column + 1)
         # print("wo\t\t\t {} x {} x {}\t requires {} rows".format(self.n_heads, self.dim, self.head_dim, self.dic_row["wo"]))
         self.dic_size["sa"] = self.sa.reshape(-1).shape[0]
-        assert self.dic_size["sa"] == self.n_heads * self.head_dim
+        assert self.dic_size["sa"] == (
+            self.dim * self.batch_size if self.kv_head_tp else self.n_heads * self.head_dim * self.batch_size
+        )
         self.dic_row["sa"] = (self.dic_size["sa"] // total_banks - 1) // self.DRAM_column + 1
         # print("sa\t\t\t {} x {}\t\t\t requires {} rows".format(1, self.n_heads * self.head_dim, self.dic_row["sa"]))
 
@@ -1065,11 +1639,17 @@ class TransformerBlockLlama(TransformerBlock):
 
         self.dic_size["w1"] = self.w1.reshape(-1).shape[0]
         assert self.dic_size["w1"] == ffn_dim * self.dim
-        self.dic_row["w1"] = ffn_FC_dim * ((self.dim - 1) // self.DRAM_column + 1)
+        if self.systolic_tp_layout is not None:
+            # W1 and W3 are packed into one output-column-tiled region.
+            self.dic_row["w1"] = self.DRAM_rows_required_for_systolic_tp_projection(
+                self.systolic_tp_layout.fused_ffn
+            )
+        else:
+            self.dic_row["w1"] = self.DRAM_rows_required_for_weight_matrix(self.w1.shape) if self.systolic_pim else ffn_FC_dim * ((self.dim - 1) // self.DRAM_column + 1)
         # print("w1\t\t\t {} x {} x {}\t requires {} rows".format(self.n_heads, self.dim, ffn_FC_dim, self.dic_row["w1"]))
         self.dic_size["w3"] = self.w3.reshape(-1).shape[0]
         assert self.dic_size["w3"] == ffn_dim * self.dim
-        self.dic_row["w3"] = ffn_FC_dim * ((self.dim - 1) // self.DRAM_column + 1)
+        self.dic_row["w3"] = 0 if self.systolic_tp_layout is not None else (self.DRAM_rows_required_for_weight_matrix(self.w3.shape) if self.systolic_pim else ffn_FC_dim * ((self.dim - 1) // self.DRAM_column + 1))
         # print("w3\t\t\t {} x {} x {}\t requires {} rows".format(self.n_heads, self.dim, ffn_FC_dim, self.dic_row["w3"]))
         self.dic_size["x1"] = ffn_dim
         self.dic_row["x1"] = (self.dic_size["x1"] // total_banks - 1) // self.DRAM_column + 1
@@ -1082,10 +1662,15 @@ class TransformerBlockLlama(TransformerBlock):
         # print("x1_sigmoid\t {} x {} x {}\t\t requires {} rows".format(self.n_heads, 1, ffn_parallel_dim, self.dic_row["x1_sigmoid"]))
         self.dic_size["w2"] = self.w2.reshape(-1).shape[0]
         assert self.dic_size["w2"] == ffn_dim * self.dim
-        self.dic_row["w2"] = ((self.dim - 1) // FC_total_banks + 1) * ((ffn_dim - 1) // self.DRAM_column + 1)
+        if self.systolic_tp_layout is not None:
+            self.dic_row["w2"] = self.DRAM_rows_required_for_systolic_tp_projection(
+                self.systolic_tp_layout.w2
+            )
+        else:
+            self.dic_row["w2"] = self.DRAM_rows_required_for_weight_matrix(self.w2.shape) if self.systolic_pim else ((self.dim - 1) // FC_total_banks + 1) * ((ffn_dim - 1) // self.DRAM_column + 1)
         # print("w2\t\t\t {} x {} x {}\t requires {} rows".format(self.n_heads, ffn_dim, self.head_dim, self.dic_row["w2"]))
         self.dic_size["ffn"] = self.ffn.reshape(-1).shape[0]
-        assert self.dic_size["ffn"] == self.dim
+        assert self.dic_size["ffn"] == self.dim * self.batch_size
         self.dic_row["ffn"] = (self.dic_size["ffn"] // total_banks - 1) // self.DRAM_column + 1
         # print("ffn\t\t\t {} x {}\t\t\t requires {} rows".format(1, self.dim, self.dic_row["ffn"]))
 
@@ -1115,9 +1700,13 @@ class TransformerBlockLlama(TransformerBlock):
         # wk
         self.wk_row_index = self.wq_row_index + self.dic_row["wq"]
         # wv
-        self.wv_row_index = self.wk_row_index + self.dic_row["wk"]
+        self.wv_row_index = (
+            self.wk_row_index
+            if self.systolic_tp_layout is not None
+            else self.wk_row_index + self.dic_row["wk"]
+        )
         # xq
-        self.xq_row_index = self.wv_row_index + self.dic_row["wv"]
+        self.xq_row_index = self.wk_row_index + self.dic_row["wk"] + self.dic_row["wv"]
         # xk
         self.xk_row_index = self.xq_row_index + self.dic_row["xk"]
         # cache_k
@@ -1139,9 +1728,13 @@ class TransformerBlockLlama(TransformerBlock):
         # w1
         self.w1_row_index = self.FFNNorm_row_index + self.dic_row["sa"]
         # w3
-        self.w3_row_index = self.w1_row_index + self.dic_row["w1"]
+        self.w3_row_index = (
+            self.w1_row_index
+            if self.systolic_tp_layout is not None
+            else self.w1_row_index + self.dic_row["w1"]
+        )
         # x1
-        self.x1_row_index = self.w3_row_index + self.dic_row["w3"]
+        self.x1_row_index = self.w1_row_index + self.dic_row["w1"] + self.dic_row["w3"]
         # x3
         self.x3_row_index = self.x1_row_index + self.dic_row["x1"]
         # x1_sigmoid
@@ -1229,8 +1822,58 @@ class TransformerBlockLlama(TransformerBlock):
         self.dic_shape["w3"] = self.store_to_DRAM_multi_channel(self.w3, self.w3_row_index, self.mode["weights"], False)
         w3_aim = self.load_from_DRAM_multi_channel(self.w3.shape, self.w3_row_index, self.mode["weights"], self.dic_shape["w3"][0], False)
         compare(self.w3, w3_aim, "w3 memory mapping")
-        
+
         # w2
         self.dic_shape["w2"] = self.store_to_DRAM_multi_channel(self.w2, self.w2_row_index, self.mode["weights"], False)
         w2_aim = self.load_from_DRAM_multi_channel(self.w2.shape, self.w2_row_index, self.mode["weights"], self.dic_shape["w2"][0], False)
         compare(self.w2, w2_aim, "w2 memory mapping")
+
+    def memory_mapping_verification_systolic_pim(self):
+        print("wq", self.wq_row_index, "wk", self.wk_row_index, "wv", self.wv_row_index, "cache_k", self.cache_k_row_index, "cache_v", self.cache_v_row_index, "wo", self.wo_row_index, "w1", self.w1_row_index, "w3", self.w3_row_index, "w2", self.w2_row_index)
+
+        # wq
+        self.dic_shape["wq"] = self.store_to_DRAM_multi_channel_systolic_pim(self.wq, self.wq_row_index, self.mode["weights"], False)
+        wq_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.wq.shape, self.wq_row_index, self.mode["weights"], self.dic_shape["wq"][0], False)
+        compare(self.wq, wq_aim, "wq memory mapping")
+
+        # wk
+        self.dic_shape["wk"] = self.store_to_DRAM_multi_channel_systolic_pim(self.wk, self.wk_row_index, self.mode["weights"], False)
+        wk_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.wk.shape, self.wk_row_index, self.mode["weights"], self.dic_shape["wk"][0], False)
+        compare(self.wk, wk_aim, "wk memory mapping")
+
+        # wv
+        self.dic_shape["wv"] = self.store_to_DRAM_multi_channel_systolic_pim(self.wv, self.wv_row_index, self.mode["weights"], False)
+        wv_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.wv.shape, self.wv_row_index, self.mode["weights"], self.dic_shape["wv"][0], False)
+        compare(self.wv, wv_aim, "wv memory mapping")
+
+        # cache_k
+        bsz, seqlen, _, _ = self.cache_k.shape
+        self.store_to_DRAM_multi_channel_systolic_pim(self.cache_k, self.cache_k_row_index, self.mode["cache_k"], False)
+        cache_k_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.cache_k.shape, self.cache_k_row_index, self.mode["cache_k"], seqlen, False)
+        compare(cache_k_aim, self.cache_k, "cache_k memory mapping")
+
+        # cache_v
+        bsz, seqlen, _, _ = self.cache_v.shape  # [8, 76, 32, 128]
+        self.store_to_DRAM_multi_channel_systolic_pim(self.cache_v, self.cache_v_row_index, self.mode["cache_v"], False)
+        cache_v_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.cache_v.shape, self.cache_v_row_index, self.mode["cache_v"], seqlen, False)
+        compare(cache_v_aim, self.cache_v, "cache_v memory mapping")
+
+        # wo
+        self.dic_shape["wo"] = self.store_to_DRAM_multi_channel_systolic_pim(self.wo, self.wo_row_index, self.mode["weights"], False)
+        wo_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.wo.shape, self.wo_row_index, self.mode["weights"], self.dic_shape["wo"][0], False)
+        compare(self.wo, wo_aim, "wo memory mapping")
+
+        # w1
+        self.dic_shape["w1"] = self.store_to_DRAM_multi_channel_systolic_pim(self.w1, self.w1_row_index, self.mode["weights"], False)
+        w1_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.w1.shape, self.w1_row_index, self.mode["weights"], self.dic_shape["w1"][0], False)
+        compare(self.w1, w1_aim, "w1 memory mapping")
+
+        # w3
+        self.dic_shape["w3"] = self.store_to_DRAM_multi_channel_systolic_pim(self.w3, self.w3_row_index, self.mode["weights"], False)
+        w3_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.w3.shape, self.w3_row_index, self.mode["weights"], self.dic_shape["w3"][0], False)
+        compare(self.w3, w3_aim, "w3 memory mapping")
+
+        # w2
+        self.dic_shape["w2"] = self.store_to_DRAM_multi_channel_systolic_pim(self.w2, self.w2_row_index, self.mode["weights"], False)
+        w2_aim = self.load_from_DRAM_multi_channel_systolic_pim(self.w2.shape, self.w2_row_index, self.mode["weights"], self.dic_shape["w2"][0], False)
+        compare(self.w2[0,:], w2_aim[0,:], "w2 memory mapping")

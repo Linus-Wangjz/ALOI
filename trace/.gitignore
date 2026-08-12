@@ -1,0 +1,12 @@
+*.txt*
+*.ramulator.yaml
+*.timing.yaml
+*.cmd.ch*
+pipeline_parallel/
+pipeline_parallel_score/
+pipeline_parallel_embedding/
+model_parallel/
+model_parallel_embedding/
+test*/
+*.tar.gz
+__pycache__/

@@ -86,6 +86,53 @@ def vector_gather_latency(size, PCIe_lanes_per_device, devices, total_devices):
         print(total_latency)
 
 
+def kv_head_tp_latency(hidden_dim, PCIe_lanes_per_device, devices, total_devices):
+    """Latency in ms for the two row-parallel reductions in one block.
+
+    Each reduction gathers one full hidden-dimension partial vector from every
+    helper and broadcasts one full reduced vector.  The switch multicast model
+    serializes a broadcast once, while the gather serializes ``devices - 1``
+    helper vectors at the main-device ingress.
+    """
+
+    if devices <= 0 or total_devices <= 0:
+        raise ValueError("device counts must be positive")
+    if devices > total_devices:
+        raise ValueError("TP devices cannot exceed total source devices")
+    if hidden_dim <= 0 or PCIe_lanes_per_device <= 0:
+        raise ValueError("hidden dimension and PCIe lanes must be positive")
+    if devices == 1:
+        return 0.0
+
+    bandwidth_per_device = PCIe_lanes_per_device * bandwidth_per_lane
+    vector_flits = math.ceil(hidden_dim * 2 / 64 / 3)
+    gather_flits = vector_flits * (devices - 1)
+    gather_latency = (
+        one_hop_round_trip_latency
+        + gather_flits * 256 / bandwidth_per_device * 1000000000 / 1024 / 1024 / 1024
+    ) / 1000000
+    broadcast_latency = (
+        one_hop_round_trip_latency
+        + vector_flits * 256 / bandwidth_per_device * 1000000000 / 1024 / 1024 / 1024
+    ) / 1000000
+    return 2.0 * (gather_latency + broadcast_latency)
+
+
+def kv_head_tp_pcie_bits(hidden_dim, devices):
+    """Return (main, per-helper, system) transmitted bits per block."""
+
+    if hidden_dim <= 0 or devices <= 0:
+        raise ValueError("hidden dimension and TP devices must be positive")
+    if devices == 1:
+        return 0, 0, 0
+    # Two gathers are charged to the main and two broadcasts to each helper.
+    # This partitions, without double counting, 4*(TP-1)*D BF16 link values.
+    main_bits = 2 * (devices - 1) * hidden_dim * 16
+    helper_bits = 2 * hidden_dim * 16
+    system_bits = main_bits + (devices - 1) * helper_bits
+    return main_bits, helper_bits, system_bits
+
+
 def get_args():
     parser = argparse.ArgumentParser('Process model parameters.')
     parser.add_argument("--pipeline-parallel", action="store_true")
