@@ -66,6 +66,22 @@ def parse_args() -> argparse.Namespace:
         choices=balanced.cent.DRAM_ENERGY_MODELS,
         default="legacy",
     )
+    parser.add_argument(
+        "--flash-attention",
+        action="store_true",
+        help="Require cent_dev-style block FlashAttention source rows.",
+    )
+    parser.add_argument(
+        "--flash-attention-block-size",
+        type=int,
+        default=1024,
+        help="Required FlashAttention block size when --flash-attention is set.",
+    )
+    parser.add_argument(
+        "--pipelined-softmax",
+        action="store_true",
+        help="Require Systolic source rows using cent_dev-style QK/Softmax overlap.",
+    )
     parser.add_argument("--no-plots", action="store_true")
     return parser.parse_args()
 
@@ -330,6 +346,9 @@ def load_systolic_candidates(
     device_capacity_gib: float,
     reserve_gib: float,
     dram_energy_model: str,
+    flash_attention: bool,
+    flash_attention_block_size: int,
+    pipelined_softmax: bool,
 ) -> tuple[pd.DataFrame, dict[str, dict[str, str]]]:
     envelope = balanced.sweep_envelope(
         device_capacity_gib, reserve_gib, tp_values=(1, 2, 4, 8)
@@ -355,6 +374,10 @@ def load_systolic_candidates(
                         dram_energy_model,
                         attention_mapping="kv_head",
                         batch_size=batch_size,
+                        flash_attention=flash_attention,
+                        flash_attention_block_size=flash_attention_block_size,
+                        pipelined_softmax=pipelined_softmax,
+                        ewmul_pnm_effective=True,
                     )
                     for tp, source in sources.items():
                         if not bool(source.get("Systolic pim", False)):
@@ -368,6 +391,43 @@ def load_systolic_candidates(
                         if int(source.get("Batch size", -1)) != batch_size:
                             raise ValueError(
                                 f"{memory}/{model}/{context}/TP={tp} has wrong batch"
+                            )
+                        if source.get("EWMUL PNM provenance") != "native":
+                            raise ValueError(
+                                f"{memory}/{model}/{context}/TP={tp} uses "
+                                "incompatible legacy activation provenance"
+                            )
+                        if not bool(source.get("EWMUL PNM effective", False)):
+                            raise ValueError(
+                                f"{memory}/{model}/{context}/TP={tp} does not "
+                                "use effective EWMUL_PNM"
+                            )
+                        if "Flash attention" not in source.index:
+                            raise ValueError(
+                                f"{memory}/{model}/{context}/TP={tp} is missing "
+                                "Flash attention provenance"
+                            )
+                        if bool(source["Flash attention"]) != flash_attention:
+                            raise ValueError(
+                                f"{memory}/{model}/{context}/TP={tp} has wrong "
+                                "Flash attention setting"
+                            )
+                        if flash_attention and int(
+                            source.get("Flash attention block size", -1)
+                        ) != flash_attention_block_size:
+                            raise ValueError(
+                                f"{memory}/{model}/{context}/TP={tp} has wrong "
+                                "Flash attention block size"
+                            )
+                        if "Pipelined softmax" not in source.index:
+                            raise ValueError(
+                                f"{memory}/{model}/{context}/TP={tp} is missing "
+                                "Pipelined softmax provenance"
+                            )
+                        if bool(source["Pipelined softmax"]) != pipelined_softmax:
+                            raise ValueError(
+                                f"{memory}/{model}/{context}/TP={tp} has wrong "
+                                "Pipelined softmax setting"
                             )
                     workload = envelope[
                         (envelope["Model"] == model)
@@ -391,6 +451,11 @@ def load_systolic_candidates(
                         )
                         candidate["Architecture"] = "Systolic 4x16"
                         candidate["Physical mapping"] = "device_channel_group_bank"
+                        candidate["Flash attention"] = flash_attention
+                        candidate["Flash attention block size"] = (
+                            flash_attention_block_size if flash_attention else 0
+                        )
+                        candidate["Pipelined softmax"] = pipelined_softmax
                         rows.append(candidate)
     return pd.DataFrame(rows), manifest
 
@@ -532,6 +597,7 @@ def plot_grouped_metric(
     *,
     annotation: str | None = None,
     dgx_line: bool = False,
+    dgx_reference: dict[tuple[str, str], float] | None = None,
 ) -> None:
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
@@ -544,6 +610,21 @@ def plot_grouped_metric(
         model_rows = rows[rows["Model"] == model]
         positions = list(range(len(balanced.CONTEXTS)))
         fig, ax = plt.subplots(figsize=(10.8, 5.2))
+        reference = None
+        if dgx_line:
+            if dgx_reference is None:
+                reference = (
+                    model_rows.drop_duplicates("Context")
+                    .set_index("Context")
+                    .loc[list(balanced.CONTEXTS), "DGX H100 throughput (tokens/s)"]
+                )
+            else:
+                reference = pd.Series(
+                    {
+                        context: dgx_reference[(model, context)]
+                        for context in balanced.CONTEXTS
+                    }
+                )
         for offset, (architecture, memory) in zip(offsets, series):
             subset = (
                 model_rows[
@@ -563,12 +644,20 @@ def plot_grouped_metric(
                 linewidth=0.55,
             )
             if annotation:
-                for bar, (_, row) in zip(bars, subset.iterrows()):
+                for bar, (context, row) in zip(bars, subset.iterrows()):
                     if annotation == "equal_power":
                         label = (
                             f"{float(row['Throughput / DGX H100']):.2f}x\n"
                             f"{int(row['PP'])}/{int(row['TP'])}/"
                             f"B{int(row['Batch size'])}/{int(row['DP'])}"
+                        )
+                    elif annotation == "tokens_per_joule":
+                        if reference is None:
+                            raise ValueError("Tokens/J annotations require a DGX reference")
+                        label = (
+                            f"{float(row[metric]) / float(reference.loc[context]):.2f}x\n"
+                            f"{int(row['PP'])}/{int(row['TP'])}/"
+                            f"B{int(row['Batch size'])}"
                         )
                     else:
                         label = (
@@ -587,11 +676,6 @@ def plot_grouped_metric(
                         linespacing=0.9,
                     )
         if dgx_line:
-            reference = (
-                model_rows.drop_duplicates("Context")
-                .set_index("Context")
-                .loc[list(balanced.CONTEXTS), "DGX H100 throughput (tokens/s)"]
-            )
             ax.plot(
                 positions,
                 reference,
@@ -632,12 +716,19 @@ def plot_grouped_metric(
 
 
 def write_plots(
-    candidates: pd.DataFrame, selected_equal_power: pd.DataFrame, output_dir: Path
+    candidates: pd.DataFrame,
+    selected_equal_power: pd.DataFrame,
+    dgx: dict[tuple[str, str], dict[str, float | int]],
+    output_dir: Path,
 ) -> None:
     throughput = select_base_objective(
         candidates, "Throughput / device (tokens/s/device)"
     )
     efficiency = select_base_objective(candidates, "Tokens/J")
+    dgx_tokens_per_joule = {
+        workload: float(reference["throughput"]) / float(reference["power"])
+        for workload, reference in dgx.items()
+    }
     plot_grouped_metric(
         throughput,
         "Throughput / device (tokens/s/device)",
@@ -650,9 +741,11 @@ def write_plots(
         efficiency,
         "Tokens/J",
         "Tokens/J",
-        "best energy efficiency (labels: PP/TP/B)",
+        "best energy efficiency (labels: token/J/DGX; PP/TP/B)",
         output_dir / "best_tokens_per_joule",
-        annotation="pp_tp",
+        annotation="tokens_per_joule",
+        dgx_line=True,
+        dgx_reference=dgx_tokens_per_joule,
     )
     plot_grouped_metric(
         throughput,
@@ -679,7 +772,14 @@ def write_plots(
     )
 
 
-def write_readme(output_dir: Path, candidates: pd.DataFrame, winners: pd.DataFrame) -> None:
+def write_readme(
+    output_dir: Path,
+    candidates: pd.DataFrame,
+    winners: pd.DataFrame,
+    flash_attention: bool,
+    flash_attention_block_size: int,
+    pipelined_softmax: bool,
+) -> None:
     summary = winners.sort_values(
         ["Model", "Context window", "Architecture", "Memory"]
     )[
@@ -697,12 +797,33 @@ def write_readme(output_dir: Path, candidates: pd.DataFrame, winners: pd.DataFra
             "Throughput / DGX H100",
         ]
     ]
+    flash_command_options = (
+        " --flash-attention"
+        f" --flash-attention-block-size {flash_attention_block_size}"
+        if flash_attention
+        else ""
+    )
+    pipeline_command_option = (
+        " --pipelined-softmax" if pipelined_softmax else ""
+    )
     text = f"""# KV-head TP Systolic all-context campaign
 
 This directory combines two architectures without rerunning the Vector path:
 
 - **Vector** is read-only reuse of `balanced_equal_power_all_contexts/analysis/all_candidates.csv`.
 - **Systolic 4x16** is the standard Device–Channel-group–Bank KV-head TP mapping.
+
+Systolic PIM follows cent_dev and therefore has effective EWMUL_PNM enabled.
+W1 `AF`/`RD_AF` commands remain in the PIM trace; RMSNorm, RoPE, and the fused
+FFN element-wise multiplies use the analytical PNM VEC_MUL path.
+
+Systolic source rows use FlashAttention: **{flash_attention}**. When enabled,
+the context block size is **{flash_attention_block_size}** and score workspace
+`W_MEM`/`R_MEM` traffic is absent from each block.
+
+Pipelined Softmax is **{pipelined_softmax}**. When enabled, full Softmax energy
+is retained, while only the cent_dev producer-startup fraction remains exposed
+on the latency critical path.
 
 Both use BF16, 16 GiB/device, the 4K/32K/128K midpoint samples, and GDDR6 plus
 LPDDR4X nCCD2/nCCD6. Vector remains the reused batch-1 baseline; Systolic
@@ -731,11 +852,20 @@ Equal-power winners: {len(winners)} total (six per model/context).
 ```bash
 /home/linuswang/miniforge3/envs/cent/bin/python scripts/run_cent_memory_cases.py \\
   --kv-head-tp-systolic --models Llama2-7B,Llama2-70B \\
-  --cases GDDR6,LPDDR4X_nCCD2,LPDDR4X_nCCD6
+  --cases GDDR6,LPDDR4X_nCCD2,LPDDR4X_nCCD6 \\
+  --EWMUL_PNM{flash_command_options}{pipeline_command_option}
 
 /home/linuswang/miniforge3/envs/cent/bin/python \\
-  scripts/analyze_kv_head_tp_systolic_all_context.py
+  scripts/analyze_kv_head_tp_systolic_all_context.py \\
+  {flash_command_options}{pipeline_command_option}
 ```
+
+For an accelerator-only accounting refresh, the first command reuses valid
+Ramulator traces/logs and overwrites the source CSV rows before regenerating
+this analysis. Legacy `--activation` provenance is retained for audit but is
+excluded from candidates. To physically replace the raw source CSVs too, delete
+the three `simulation_results_decode_only_long_context_midpoint*.csv` files
+under `raw/systolic_4x16/{{GDDR6,LPDDR4X}}` before the first command.
 """
     (output_dir / "README.md").write_text(text)
 
@@ -756,6 +886,9 @@ def main() -> int:
         args.device_capacity_gib,
         args.reserve_gib,
         args.dram_energy_model,
+        args.flash_attention,
+        args.flash_attention_block_size,
+        args.pipelined_softmax,
     )
     candidates = pd.concat([vector, systolic], ignore_index=True, sort=False)
     candidates = add_architecture_ranks(candidates).sort_values(
@@ -820,6 +953,12 @@ def main() -> int:
         "models": list(balanced.MODEL_CONFIG),
         "contexts": balanced.CONTEXTS,
         "systolic_array": "4x16",
+        "ewmul_pnm_effective": True,
+        "flash_attention": args.flash_attention,
+        "flash_attention_block_size": (
+            args.flash_attention_block_size if args.flash_attention else 0
+        ),
+        "pipelined_softmax": args.pipelined_softmax,
         "batch_sizes": list(SYSTOLIC_BATCH_SIZES),
         "tp_values": [1, 2, 4, 8],
         "ramulator_jobs": 288,
@@ -840,10 +979,17 @@ def main() -> int:
     manifest_text = json.dumps(manifest, indent=2) + "\n"
     reject_forbidden_vector_source(manifest["vector_source"]["path"])
     (output_dir / "manifest.json").write_text(manifest_text)
-    write_readme(output_dir, candidates, winners)
+    write_readme(
+        output_dir,
+        candidates,
+        winners,
+        args.flash_attention,
+        args.flash_attention_block_size,
+        args.pipelined_softmax,
+    )
 
     if not args.no_plots:
-        write_plots(candidates, winners, output_dir)
+        write_plots(candidates, winners, dgx, output_dir)
         print(f"[plots] {balanced.display_path(output_dir)}")
 
     columns = [

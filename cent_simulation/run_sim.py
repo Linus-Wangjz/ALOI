@@ -13,7 +13,7 @@ from cxl_latency import (
     llama_latency,
     vector_latency,
 )
-from cent_power_calculator import DRAM_ENERGY_MODELS, ACCEL_CYCLE, add_energy_terms, kv_head_tp_pnm_dynamic_energy, power_calculator, command_processor, command_trace_prefix_for_log, set_channel_count, KILO, FREQ, SB_RD_CYCLE, SB_WR_CYCLE, RV_RMSNorm_CYCLE, RV_ROTEmbed_CYCLE, RV_SFT_CYCLE_PIPELINE
+from cent_power_calculator import DRAM_ENERGY_MODELS, ACCEL_CYCLE, SHARED_BUFFER_CAPACITY_BYTES, SRAM_IO_PARALLEL, add_energy_terms, kv_head_tp_pnm_dynamic_energy, power_calculator, command_processor, command_trace_prefix_for_log, set_channel_count, KILO, FREQ, SB_RD_CYCLE, SB_WR_CYCLE, RV_RMSNorm_CYCLE, RV_ROTEmbed_CYCLE, RV_SFT_CYCLE_PIPELINE
 from systolic_power import SYSTOLIC_PIM_POWER_SCALING
 from tp_mapping import KVHeadTPLayout, SystolicTPLayout, kv_head_tp_shape
 from utils import InOut_latency, n_heads, gqa_factor, embedding_size, ffn_size, TransformerBlock_number, minimal_channel_per_block, pipeline_parallel_mode_list, model_parallel_mode_list
@@ -22,6 +22,14 @@ def get_args():
     parser = argparse.ArgumentParser('run_scripts.py')
     parser.add_argument("--num_channels", type=int, help="Number of channels per device", default=32)
     parser.add_argument("--num_banks", "--num-banks", dest="num_banks", type=int, help="Number of banks per channel", default=16)
+    parser.add_argument(
+        "--parallel_SRAM",
+        "--parallel-sram",
+        dest="parallel_sram",
+        type=int,
+        default=int(SRAM_IO_PARALLEL),
+        help="Independent 128-bit shared-buffer banks/ports (cent_dev default: 32)",
+    )
     parser.add_argument("--num_devices", type=int, help="Number of CXL devices", default=32)
     parser.add_argument("--PCIE_lanes", type=int, help="Number of PCIE lanes", default=144)
     parser.add_argument("--reuse_size", type=int, help="GB reuse size, depending on register number", default=32)
@@ -52,8 +60,34 @@ def get_args():
     parser.add_argument("--systolic_pim", "--systolic-pim", dest="systolic_pim", action="store_true", help="Use the systolic PIM trace path")
     parser.add_argument("--systolic_dim", "--systolic-dim", dest="systolic_dim", type=int, choices=sorted(SYSTOLIC_PIM_POWER_SCALING), default=1, help="Systolic array height; width is 16")
     parser.add_argument("--batch_size", "--batch-size", dest="batch_size", type=int, default=1, help="Decode batch size; independent of the systolic array height")
-    parser.add_argument("--flash_attention", "--flash-attention", dest="flash_attention", action="store_true", help="Chunk systolic attention traces")
+    parser.add_argument(
+        "--EWMUL_PNM",
+        "--EWMUL-PNM",
+        dest="ewmul_pnm",
+        action="store_true",
+        help=(
+            "Move RMSNorm, RoPE, and fused-FFN element-wise multiplies to "
+            "the PNM VEC_MUL path; cent_dev forces this on for systolic PIM"
+        ),
+    )
+    parser.add_argument(
+        "--flash_attention",
+        "--flash-attention",
+        dest="flash_attention",
+        action="store_true",
+        help="Use cent_dev-style block FlashAttention without score DRAM workspace",
+    )
     parser.add_argument("--flash_attention_block_size", "--flash-attention-block-size", dest="flash_attention_block_size", type=int, default=1024)
+    parser.add_argument(
+        "--pipelined_softmax",
+        "--pipelined-softmax",
+        dest="pipelined_softmax",
+        action="store_true",
+        help=(
+            "Overlap Softmax with its QK score producer using the cent_dev "
+            "startup-window model; Softmax energy is still charged in full"
+        ),
+    )
     parser.add_argument("--inter-device-attention", action="store_true")
     parser.add_argument(
         "--kv-head-tp",
@@ -80,7 +114,9 @@ def get_args():
         parser.error("--flash_attention_block_size must be positive")
     if args.batch_size < 1:
         parser.error("--batch-size must be positive")
-    set_channel_count(args.num_channels)
+    if args.parallel_sram < 1:
+        parser.error("--parallel-sram must be positive")
+    set_channel_count(args.num_channels, args.parallel_sram)
     if args.simulation_result_path is None:
         args.simulation_result_path = default_simulation_result_path(args)
     if args.processed_result_path is None:
@@ -239,10 +275,51 @@ def log_root(args):
 
 
 def systolic_trace_variant(args):
-    variant = f"systolic_pim_{args.systolic_dim}_batch_size_{args.batch_size}"
+    variant = (
+        f"systolic_pim_{args.systolic_dim}_batch_size_{args.batch_size}"
+        f"_ewmul_pnm_{int(ewmul_pnm_enabled(args))}"
+    )
     if args.flash_attention:
         variant += f"_flash_{args.flash_attention_block_size}"
     return variant
+
+
+def ewmul_pnm_requested(args):
+    """Return the user-requested EWMUL placement."""
+
+    return bool(getattr(args, "ewmul_pnm", getattr(args, "EWMUL_PNM", False)))
+
+
+def ewmul_pnm_enabled(args):
+    """Match cent_dev: every systolic-PIM run uses the PNM EWMUL path."""
+
+    return bool(
+        getattr(args, "systolic_pim", False) or ewmul_pnm_requested(args)
+    )
+
+
+def softmax_pipeline_startup_tokens(args):
+    """Number of score positions produced before streamed Softmax can hide.
+
+    This is cent_dev's ``pp_init`` model.  A systolic MAC command produces one
+    16-element burst per bank, while the vector path produces one element per
+    bank.  It is a producer/consumer startup window, not the pipeline-parallel
+    stage count.
+    """
+
+    producer_width = 16 if args.systolic_pim else 1
+    return producer_width * args.num_channels * args.num_banks
+
+
+def softmax_exposure_factor(args, seqlen):
+    """Return the fraction of full Softmax latency exposed on the critical path."""
+
+    if seqlen <= 0:
+        raise ValueError("seqlen must be positive")
+    if not getattr(args, "pipelined_softmax", False):
+        return 1.0
+    startup_tokens = softmax_pipeline_startup_tokens(args)
+    return min(startup_tokens, seqlen) / float(seqlen)
 
 
 def experiment_name(args):
@@ -448,6 +525,10 @@ def generate_trace(args, seqlen_list):
             if trace_needs_generation(f"{trace_root_dir}/pipeline_parallel/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"):
                 commands_generate_traces.append([python, "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--only-trace", "--num-channels", str(args.num_channels), "--num-banks", str(args.num_banks), "--max-seq-len", str(max_seq_len), "--channels-per-block", str(channels_per_block), "--pipeline-parallel", "--multi-tb-per-device", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", f"{trace_root_dir}/pipeline_parallel/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"])
 
+    if ewmul_pnm_enabled(args):
+        for command in commands_generate_traces:
+            command.append("--EWMUL-PNM")
+
     if args.systolic_pim:
         systolic_args = [
             "--systolic-pim",
@@ -568,21 +649,66 @@ def process_results(args):
 
 def calculate_acc_latency(args, seqlen, tp=1, device_role="main"):
     latency = {}
-    GQA_factor = 1.00 + 1.00 / gqa_factor[args.model]
     local_heads = n_heads[args.model] // tp if args.kv_head_tp else n_heads[args.model]
     local_hidden = embedding_size[args.model] // tp if args.kv_head_tp else embedding_size[args.model]
+    local_kv_hidden = local_hidden // gqa_factor[args.model]
+    local_ffn = ffn_size[args.model] // tp if args.kv_head_tp else ffn_size[args.model]
     rms_hidden = embedding_size[args.model]
-    latency["RMSNorm_latency"] = rms_hidden / 16.00 / 16.00 / args.num_channels * ACCEL_CYCLE["VEC"]
+    latency["RMSNorm_latency"] = rms_hidden / 16.00 / 16.00 / args.num_channels * ACCEL_CYCLE["VEC_ADD"]
+    if ewmul_pnm_enabled(args):
+        latency["RMSNorm_latency"] += (
+            rms_hidden / 16.00 / args.num_channels
+            * ACCEL_CYCLE["VEC_MUL"]
+            * 3.00
+        )
     latency["RMSNorm_latency"] += SB_RD_CYCLE + SB_WR_CYCLE + 1.00
     latency["RMSNorm_latency"] += RV_RMSNorm_CYCLE
     latency["RMSNorm_latency"] = float(2.00 * latency["RMSNorm_latency"]) / float(FREQ / KILO)
     latency["Softmax_latency"] = seqlen * local_heads / 16.00 / args.num_channels * ACCEL_CYCLE["EXP"]
-    latency["Softmax_latency"] += seqlen * local_heads / 16.00 / args.num_channels * ACCEL_CYCLE["VEC"]
+    latency["Softmax_latency"] += seqlen * local_heads / 16.00 / args.num_channels * ACCEL_CYCLE["VEC_ADD"]
+    latency["Softmax_latency"] += seqlen * local_heads / 16.00 / args.num_channels * ACCEL_CYCLE["VEC_MUL"] * 2.00
     latency["Softmax_latency"] += local_heads * 1.00 * SB_RD_CYCLE
     latency["Softmax_latency"] += local_heads * RV_SFT_CYCLE_PIPELINE
     latency["Softmax_latency"] = float(latency["Softmax_latency"]) / float(FREQ / KILO)
-    latency["RotEmbed_latency"] = local_hidden * RV_ROTEmbed_CYCLE
-    latency["RotEmbed_latency"] = float(GQA_factor * latency["RotEmbed_latency"]) / float(FREQ / KILO)
+    latency["Softmax_latency"] *= softmax_exposure_factor(args, seqlen)
+    if getattr(args, "flash_attention", False):
+        flash_score_buffer_bytes = (
+            args.flash_attention_block_size * local_heads * 2
+        )
+        if flash_score_buffer_bytes > SHARED_BUFFER_CAPACITY_BYTES:
+            raise ValueError(
+                "FlashAttention score block requires "
+                f"{flash_score_buffer_bytes} B of shared buffer, exceeding the "
+                f"cent_dev-compatible {SHARED_BUFFER_CAPACITY_BYTES} B capacity"
+            )
+        # Keep the cent_dev abstraction: online-softmax block merge work is a
+        # single vector-add term, while the score-to-SV stream itself is
+        # represented by the adjacent QK/SV trace commands.
+        latency["FlashAttention_latency"] = (
+            seqlen // args.flash_attention_block_size
+            * local_heads / 16.00 / args.num_channels
+            * ACCEL_CYCLE["VEC_ADD"]
+            / float(FREQ / KILO)
+        )
+    latency["RotEmbed_latency"] = (
+        local_hidden + local_kv_hidden
+    ) * RV_ROTEmbed_CYCLE
+    if ewmul_pnm_enabled(args):
+        latency["RotEmbed_latency"] += (
+            (local_hidden + local_kv_hidden)
+            / 16.00
+            / args.num_channels
+            * ACCEL_CYCLE["VEC_MUL"]
+        )
+        latency["EWMULActivation_latency"] = (
+            local_ffn
+            / 16.00
+            / args.num_channels
+            * 2.00
+            * ACCEL_CYCLE["VEC_MUL"]
+            / float(FREQ / KILO)
+        )
+    latency["RotEmbed_latency"] = float(latency["RotEmbed_latency"]) / float(FREQ / KILO)
     if args.kv_head_tp:
         shape = kv_head_tp_shape(
                 dim=embedding_size[args.model],
@@ -597,18 +723,6 @@ def calculate_acc_latency(args, seqlen, tp=1, device_role="main"):
             banks_per_channel=args.num_banks,
             max_seq_len=(args.max_seq_len if args.max_seq_len is not None else seqlen),
         )
-        # K and V use disjoint channel halves, so their equal-size repacks
-        # overlap.  No bank-private buffer is assumed.
-        repack_groups_per_channel = math.ceil(
-            layout.shape.local_kv_dim
-            / 16.0
-            / layout.kv_projection_channels_per_operand
-        )
-        repack_cycles = repack_groups_per_channel * (
-            SB_RD_CYCLE + SB_WR_CYCLE + 1.0
-        )
-        latency["KVRepack_latency"] = repack_cycles / float(FREQ / KILO)
-
         if args.systolic_pim:
             systolic_layout = SystolicTPLayout(
                 shape=shape,
@@ -625,15 +739,8 @@ def calculate_acc_latency(args, seqlen, tp=1, device_role="main"):
                     reduction_work[name] / 16.0 / args.num_channels
                 )
                 latency[f"{name.upper()}Reduction_latency"] = (
-                    groups_per_channel * ACCEL_CYCLE["VEC"]
+                    groups_per_channel * ACCEL_CYCLE["VEC_ADD"]
                 ) / float(FREQ / KILO)
-            activation_groups_per_channel = math.ceil(
-                shape.local_ffn_dim / 16.0 / args.num_channels
-            )
-            latency["FusedActivation_latency"] = (
-                activation_groups_per_channel
-                * (ACCEL_CYCLE["EXP"] + 2.0 * ACCEL_CYCLE["VEC"])
-            ) / float(FREQ / KILO)
         else:
             reduction_groups_per_channel = math.ceil(
                 layout.v_reduction_adds(seqlen)
@@ -641,10 +748,9 @@ def calculate_acc_latency(args, seqlen, tp=1, device_role="main"):
                 / args.num_channels
             )
             latency["SVReduction_latency"] = (
-                reduction_groups_per_channel * ACCEL_CYCLE["VEC"]
+                reduction_groups_per_channel * ACCEL_CYCLE["VEC_ADD"]
             ) / float(FREQ / KILO)
     else:
-        latency["KVRepack_latency"] = 0.0
         latency["SVReduction_latency"] = 0.0
     return latency
 
@@ -708,7 +814,16 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
         pp_handoff_cxl_latency = cxl_latency if pp > 1 else 0.0
     main_acc_latency_dict = calculate_acc_latency(args, seqlen, FC_devices, "main")
     helper_acc_latency_dict = calculate_acc_latency(args, seqlen, FC_devices, "helper")
+    softmax_pipeline_factor = softmax_exposure_factor(args, seqlen)
     main_acc_latency = sum(main_acc_latency_dict.values()) * blocks_per_device * args.batch_size
+    main_exposed_softmax_latency = (
+        main_acc_latency_dict["Softmax_latency"]
+        * blocks_per_device
+        * args.batch_size
+    )
+    main_full_softmax_latency = (
+        main_exposed_softmax_latency / softmax_pipeline_factor
+    )
     helper_acc_latency = (
         sum(helper_acc_latency_dict.values()) * blocks_per_device * args.batch_size
         if helper_stats is not None or (args.kv_head_tp and FC_devices > 1)
@@ -758,6 +873,8 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
         command_trace_prefix=command_trace_prefix_for_log(path),
         rmsnorm_hidden_dim=(embedding_size[args.model] if args.kv_head_tp else None),
     )
+    reduction_adds = 0
+    local_ffn_elements = ffn_size[args.model]
     if args.kv_head_tp:
         kv_layout = KVHeadTPLayout(
             shape=kv_head_tp_shape(
@@ -784,16 +901,26 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
             reduction_adds = sum(
                 systolic_layout.pnm_reduction_adds(seqlen).values()
             )
-            activation_elements = kv_layout.shape.local_ffn_dim
         else:
             reduction_adds = kv_layout.v_reduction_adds(seqlen)
-            activation_elements = 0
-        pnm_energy = kv_head_tp_pnm_dynamic_energy(
-            stats,
-            repack_elements=2 * kv_layout.shape.local_kv_dim,
-            reduction_adds=reduction_adds,
-            activation_elements=activation_elements,
+        local_ffn_elements = kv_layout.shape.local_ffn_dim
+
+    ewmul_elements = 0
+    if ewmul_pnm_enabled(args):
+        # Two RMSNorms, each with x.pow plus two element-wise multiplies;
+        # Q/K RoPE; and two multiplies for SiLU(W1) * W3.
+        ewmul_elements = (
+            6 * embedding_size[args.model]
+            + local_hidden
+            + local_hidden // gqa_factor[args.model]
+            + 2 * local_ffn_elements
         )
+    pnm_energy = kv_head_tp_pnm_dynamic_energy(
+        stats,
+        reduction_adds=reduction_adds,
+        ewmul_elements=ewmul_elements,
+    )
+    if reduction_adds or ewmul_elements:
         energy_main = add_energy_terms(energy_main, pnm_energy)
     energy_main = adjust_systolic_energy(energy_main, args)
     if args.model_parallel:
@@ -807,7 +934,8 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
                 command_trace_prefix=command_trace_prefix_for_log(path),
                 rmsnorm_hidden_dim=embedding_size[args.model],
             )
-            energy_helper = add_energy_terms(energy_helper, pnm_energy)
+            if reduction_adds or ewmul_elements:
+                energy_helper = add_energy_terms(energy_helper, pnm_energy)
             energy_helper = adjust_systolic_energy(energy_helper, args)
             for comp in energy_main.keys():
                 energy_token[comp] = (
@@ -852,6 +980,20 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
         'Batch size': args.batch_size,
         'Systolic pim': args.systolic_pim,
         'Systolic dim': args.systolic_dim,
+        'EWMUL PNM requested': ewmul_pnm_requested(args),
+        'EWMUL PNM effective': ewmul_pnm_enabled(args),
+        'EWMUL PNM provenance': 'native',
+        'Flash attention': args.flash_attention,
+        'Flash attention block size': (
+            args.flash_attention_block_size if args.flash_attention else 0
+        ),
+        'Pipelined softmax': getattr(args, 'pipelined_softmax', False),
+        'Softmax pipeline startup tokens': softmax_pipeline_startup_tokens(args),
+        'Softmax exposure factor': softmax_pipeline_factor,
+        'Parallel SRAM banks': getattr(
+            args, 'parallel_sram', int(SRAM_IO_PARALLEL)
+        ),
+        'Shared buffer capacity (bytes)': SHARED_BUFFER_CAPACITY_BYTES,
         'Channels per device': args.num_channels,
         'Banks per device': args.num_banks,
         'Channels per block': channels_per_block,
@@ -866,11 +1008,12 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
         'Acc latency': acc_latency,
         'Main Acc latency': main_acc_latency,
         'Helper Acc latency': helper_acc_latency,
-        'KV repack latency': main_acc_latency_dict.get('KVRepack_latency', 0.0) * blocks_per_device * args.batch_size,
+        'Full softmax latency': main_full_softmax_latency,
+        'Exposed softmax latency': main_exposed_softmax_latency,
         'Q reduction latency': main_acc_latency_dict.get('QReduction_latency', 0.0) * blocks_per_device * args.batch_size,
         'KV reduction latency': main_acc_latency_dict.get('KVReduction_latency', 0.0) * blocks_per_device * args.batch_size,
         'SV reduction latency': main_acc_latency_dict.get('SVReduction_latency', 0.0) * blocks_per_device * args.batch_size,
-        'Fused activation latency': main_acc_latency_dict.get('FusedActivation_latency', 0.0) * blocks_per_device * args.batch_size,
+        'EWMUL activation latency': main_acc_latency_dict.get('EWMULActivation_latency', 0.0) * blocks_per_device * args.batch_size,
         'Critical local latency': critical_local_latency,
         'TransformerBlock latency': transformer_block_latency,
         'Embedding latency': embedding_latency_data,
@@ -904,6 +1047,12 @@ def update_csv(args, seqlen_list):
 
     if os.path.exists(args.simulation_result_path):
         results_df = pd.read_csv(args.simulation_result_path)
+        # ``KV repack latency`` was an obsolete analytical term.  Explicit
+        # K/V cache W_MEM commands remain in the trace and are still charged.
+        results_df = results_df.drop(
+            columns=['KV repack latency', 'Fused activation latency'],
+            errors='ignore',
+        )
         if 'DRAM energy model' not in results_df.columns:
             results_df['DRAM energy model'] = 'legacy'
         if 'Context window' not in results_df.columns:
@@ -914,8 +1063,37 @@ def update_csv(args, seqlen_list):
             results_df['Helper PIM latency'] = 0.0
         if 'Attention mapping' not in results_df.columns:
             results_df['Attention mapping'] = 'legacy_unspecified'
+        if 'Activation placement' in results_df.columns:
+            results_df['Legacy activation placement'] = results_df[
+                'Activation placement'
+            ]
+            results_df = results_df.drop(columns=['Activation placement'])
+        if 'EWMUL PNM requested' not in results_df.columns:
+            results_df['EWMUL PNM requested'] = pd.NA
+        if 'EWMUL PNM effective' not in results_df.columns:
+            results_df['EWMUL PNM effective'] = pd.NA
+        if 'EWMUL PNM provenance' not in results_df.columns:
+            results_df['EWMUL PNM provenance'] = (
+                'legacy_activation_incompatible'
+                if 'Legacy activation placement' in results_df.columns
+                else 'legacy_unspecified_incompatible'
+            )
+        if 'Flash attention' not in results_df.columns:
+            results_df['Flash attention'] = False
+        if 'Flash attention block size' not in results_df.columns:
+            results_df['Flash attention block size'] = 0
+        if 'Pipelined softmax' not in results_df.columns:
+            results_df['Pipelined softmax'] = False
+        if 'Softmax pipeline startup tokens' not in results_df.columns:
+            results_df['Softmax pipeline startup tokens'] = 0
+        if 'Softmax exposure factor' not in results_df.columns:
+            results_df['Softmax exposure factor'] = 1.0
+        if 'Parallel SRAM banks' not in results_df.columns:
+            results_df['Parallel SRAM banks'] = 1
+        if 'Shared buffer capacity (bytes)' not in results_df.columns:
+            results_df['Shared buffer capacity (bytes)'] = 512 * 1024
     else:
-        columns = ['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'Channels per device', 'Banks per device', 'Channels per block', 'Sequence length', 'Context window', 'PIM latency', 'Main PIM latency', 'Helper PIM latency', 'CXL latency', 'Acc latency', 'TransformerBlock latency', 'Embedding latency', 'Token latency (ms)', 'Throughput (tokens/s)', 'Token energy (mJ)', 'Total power (W)', 'Device utilization', 'Attention mapping', 'DRAM energy model']
+        columns = ['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'EWMUL PNM requested', 'EWMUL PNM effective', 'EWMUL PNM provenance', 'Flash attention', 'Flash attention block size', 'Pipelined softmax', 'Softmax pipeline startup tokens', 'Softmax exposure factor', 'Parallel SRAM banks', 'Shared buffer capacity (bytes)', 'Channels per device', 'Banks per device', 'Channels per block', 'Sequence length', 'Context window', 'PIM latency', 'Main PIM latency', 'Helper PIM latency', 'CXL latency', 'Full softmax latency', 'Exposed softmax latency', 'TransformerBlock latency', 'Embedding latency', 'Token latency (ms)', 'Throughput (tokens/s)', 'Token energy (mJ)', 'Total power (W)', 'Device utilization', 'Attention mapping', 'DRAM energy model']
         results_df = pd.DataFrame(columns=columns)
 
     embedding_latency = {'pipeline_parallel': {}, 'model_parallel': {}}
@@ -976,8 +1154,11 @@ def update_csv(args, seqlen_list):
             results_df = pd.concat([results_df, new_result_df], ignore_index=True)
 
     # Save the DataFrame to a CSV file
-    results_df = results_df.drop_duplicates(subset=['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'Channels per device', 'Banks per device', 'Channels per block', 'Sequence length', 'Context window', 'Attention mapping', 'DRAM energy model'], keep='last')
-    results_df = results_df.sort_values(by=['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'Channels per device', 'Banks per device', 'Channels per block', 'Context window', 'Sequence length', 'DRAM energy model'])
+    # The SRAM organization is a hardware revision, not an additional sweep
+    # dimension.  Reprocessing an existing workload therefore replaces its
+    # legacy single-port result with the current banked-SRAM result.
+    results_df = results_df.drop_duplicates(subset=['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'EWMUL PNM effective', 'EWMUL PNM provenance', 'Flash attention', 'Flash attention block size', 'Pipelined softmax', 'Channels per device', 'Banks per device', 'Channels per block', 'Sequence length', 'Context window', 'Attention mapping', 'DRAM energy model'], keep='last')
+    results_df = results_df.sort_values(by=['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'EWMUL PNM provenance', 'EWMUL PNM effective', 'Flash attention', 'Flash attention block size', 'Pipelined softmax', 'Parallel SRAM banks', 'Channels per device', 'Banks per device', 'Channels per block', 'Context window', 'Sequence length', 'DRAM energy model'])
     results_df.to_csv(args.simulation_result_path, index=False)
     # print(results_df)
 
@@ -993,15 +1174,36 @@ def process_throughputs(args):
         df_simulation = df_simulation[df_simulation['Banks per device'] == args.num_banks]
     if 'DRAM energy model' in df_simulation.columns:
         df_simulation = df_simulation[df_simulation['DRAM energy model'] == args.dram_energy_model]
+    if 'Parallel SRAM banks' in df_simulation.columns:
+        df_simulation = df_simulation[
+            df_simulation['Parallel SRAM banks'] == args.parallel_sram
+        ]
     if 'Systolic pim' in df_simulation.columns:
         df_simulation = df_simulation[df_simulation['Systolic pim'] == args.systolic_pim]
     if args.systolic_pim and 'Systolic dim' in df_simulation.columns:
         df_simulation = df_simulation[df_simulation['Systolic dim'] == args.systolic_dim]
+    required_ewmul_columns = {
+        'EWMUL PNM effective', 'EWMUL PNM provenance'
+    }
+    if not required_ewmul_columns.issubset(df_simulation.columns):
+        raise ValueError(
+            "Simulation results use legacy --activation provenance; regenerate "
+            "them with the --EWMUL_PNM model"
+        )
+    df_simulation = df_simulation[
+        (df_simulation['EWMUL PNM effective'] == ewmul_pnm_enabled(args))
+        & (df_simulation['EWMUL PNM provenance'] == 'native')
+    ]
+    if 'Pipelined softmax' in df_simulation.columns:
+        df_simulation = df_simulation[
+            df_simulation['Pipelined softmax']
+            == getattr(args, 'pipelined_softmax', False)
+        ]
     
     if os.path.exists(args.processed_result_path):
         results_df = pd.read_csv(args.processed_result_path)
     else:
-        columns = ['Model', 'Device number', 'Banks per device', 'Seqlen', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'Phase', 'DRAM energy model', 'Total Latency (s)', 'Throughput (tokens/s)', 'Energy per Token (mJ)', 'Total power (W)']
+        columns = ['Model', 'Device number', 'Banks per device', 'Seqlen', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'EWMUL PNM effective', 'Pipelined softmax', 'Phase', 'DRAM energy model', 'Total Latency (s)', 'Throughput (tokens/s)', 'Energy per Token (mJ)', 'Total power (W)']
         results_df = pd.DataFrame(columns=columns)
 
 
@@ -1041,6 +1243,8 @@ def process_throughputs(args):
                 'Batch size': args.batch_size,
                 'Systolic pim': args.systolic_pim,
                 'Systolic dim': args.systolic_dim,
+                'EWMUL PNM effective': ewmul_pnm_enabled(args),
+                'Pipelined softmax': getattr(args, 'pipelined_softmax', False),
                 'Phase': args.phase,
                 'DRAM energy model': args.dram_energy_model,
                 'Total Latency (s)': total_latency,
@@ -1080,6 +1284,8 @@ def process_throughputs(args):
             'Batch size': args.batch_size,
             'Systolic pim': args.systolic_pim,
             'Systolic dim': args.systolic_dim,
+            'EWMUL PNM effective': ewmul_pnm_enabled(args),
+            'Pipelined softmax': getattr(args, 'pipelined_softmax', False),
             'Phase': args.phase,
             'DRAM energy model': args.dram_energy_model,
             'Total Latency (s)': total_latency,
@@ -1091,7 +1297,7 @@ def process_throughputs(args):
     results_df = pd.concat([results_df, new_result_df], ignore_index=True)
     
     results_df = results_df.drop_duplicates()
-    results_df = results_df.sort_values(by=['Model', 'Device number', 'Banks per device', 'Seqlen', 'Pipeline parallelism', 'Tensor parallelism', 'Phase'])
+    results_df = results_df.sort_values(by=['Model', 'Device number', 'Banks per device', 'Seqlen', 'Pipeline parallelism', 'Tensor parallelism', 'EWMUL PNM effective', 'Pipelined softmax', 'Phase'])
     os.makedirs(os.path.dirname(args.processed_result_path) or ".", exist_ok=True)
     results_df.to_csv(args.processed_result_path, index=False)
 

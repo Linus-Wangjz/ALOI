@@ -51,11 +51,17 @@ class SystolicTraceRecorder:
     Vector_Matrix_Mul_weight_systolic_tp_only_trace = (
         TransformerBlock.Vector_Matrix_Mul_weight_systolic_tp_only_trace
     )
+    _trace_fused_activation_systolic_pim_only_trace = (
+        TransformerBlock._trace_fused_activation_systolic_pim_only_trace
+    )
     Vector_Matrix_Mul_score_systolic_tp_only_trace = (
         TransformerBlock.Vector_Matrix_Mul_score_systolic_tp_only_trace
     )
     Vector_Matrix_Mul_output_systolic_tp_only_trace = (
         TransformerBlock.Vector_Matrix_Mul_output_systolic_tp_only_trace
+    )
+    Vector_Matrix_Mul_flash_attention_systolic_tp_only_trace = (
+        TransformerBlock.Vector_Matrix_Mul_flash_attention_systolic_tp_only_trace
     )
     systolic_tp_cache_rows_per_batch = (
         TransformerBlock.systolic_tp_cache_rows_per_batch
@@ -93,6 +99,12 @@ class SystolicTraceRecorder:
 
     def RD_MAC_only_trace(self, channels):
         self.events.append(("RD_MAC", tuple(channels)))
+
+    def AF_only_trace(self, channels):
+        self.events.append(("AF", tuple(channels)))
+
+    def RD_AF_only_trace(self, channels):
+        self.events.append(("RD_AF", tuple(channels)))
 
     def W_MEM_only_trace(self, channel, bank, row, elements):
         self.events.append(("W_MEM", channel, bank, row, elements))
@@ -446,6 +458,65 @@ class SystolicTPTraceTests(unittest.TestCase):
             [2000, 2020, 2040, 2060],
         )
 
+    def test_flash_attention_directly_connects_qk_to_sv_per_block(self):
+        class FlashScheduleRecorder:
+            Vector_Matrix_Mul_flash_attention_systolic_tp_only_trace = (
+                TransformerBlock.Vector_Matrix_Mul_flash_attention_systolic_tp_only_trace
+            )
+
+            def __init__(self, layout):
+                self.systolic_tp_layout = layout
+                self.flash_attention_block_size = 1024
+                self.trace_score = False
+                self.events = []
+
+            def Vector_Matrix_Mul_score_systolic_tp_only_trace(self, row, seqlen):
+                self.events.append(("qk", row, seqlen))
+
+            def Vector_Matrix_Mul_output_systolic_tp_only_trace(self, row, seqlen):
+                self.events.append(("sv", row, seqlen))
+
+        # TP=1 has eight local KV heads.  The cent_dev-compatible K stride is
+        # ceil(1024 / 512 banks) * ceil(128 * 8 / 1024) = 2 rows; V advances
+        # by ceil(1024 / 1024) = 1 command-address row per flash block.
+        recorder = FlashScheduleRecorder(self.layout(tp=1))
+        recorder.Vector_Matrix_Mul_flash_attention_systolic_tp_only_trace(
+            100, 200, 4096
+        )
+        self.assertEqual(
+            recorder.events,
+            [
+                ("qk", 100, 1024), ("sv", 200, 1024),
+                ("qk", 102, 1024), ("sv", 201, 1024),
+                ("qk", 104, 1024), ("sv", 202, 1024),
+                ("qk", 106, 1024), ("sv", 203, 1024),
+            ],
+        )
+
+    def test_flash_attention_score_trace_omits_sv(self):
+        class ScoreOnlyRecorder:
+            Vector_Matrix_Mul_flash_attention_systolic_tp_only_trace = (
+                TransformerBlock.Vector_Matrix_Mul_flash_attention_systolic_tp_only_trace
+            )
+
+            def __init__(self, layout):
+                self.systolic_tp_layout = layout
+                self.flash_attention_block_size = 1024
+                self.trace_score = True
+                self.events = []
+
+            def Vector_Matrix_Mul_score_systolic_tp_only_trace(self, row, seqlen):
+                self.events.append(("qk", row, seqlen))
+
+            def Vector_Matrix_Mul_output_systolic_tp_only_trace(self, row, seqlen):
+                self.events.append(("sv", row, seqlen))
+
+        recorder = ScoreOnlyRecorder(self.layout(tp=1))
+        recorder.Vector_Matrix_Mul_flash_attention_systolic_tp_only_trace(
+            100, 200, 2048
+        )
+        self.assertEqual(recorder.events, [("qk", 100, 1024), ("qk", 102, 1024)])
+
     def test_fused_tp8_ffn_uses_28_channels_and_one_output_tile(self):
         recorder = SystolicTraceRecorder(self.layout())
         recorder.Vector_Matrix_Mul_weight_systolic_tp_only_trace(
@@ -458,6 +529,18 @@ class SystolicTPTraceTests(unittest.TestCase):
         }
         self.assertEqual(masks, {tuple(range(28))})
         self.assertEqual(recorder.systolic_pipeline_cycles["reduction"], 8192)
+
+    def test_w1_silu_af_rd_af_remains_with_ewmul_pnm(self):
+        recorder = SystolicTraceRecorder(self.layout())
+        recorder._trace_fused_activation_systolic_pim_only_trace(
+            recorder.systolic_tp_layout.shape.local_ffn_dim
+        )
+        af = [event for event in recorder.events if event[0] == "AF"]
+        rd_af = [event for event in recorder.events if event[0] == "RD_AF"]
+        # TP=8 has a 3,584-column W1 shard: one 14-channel output tile,
+        # with four AF/RD_AF commands for the 4x16 array rows.
+        self.assertEqual(af, [("AF", tuple(range(14)))] * 4)
+        self.assertEqual(rd_af, [("RD_AF", tuple(range(14)))] * 4)
 
     def test_sa4_sv_query_pair_is_one_full_width_wave(self):
         recorder = SystolicTraceRecorder(self.layout(systolic_height=4))
@@ -590,17 +673,183 @@ class KVHeadTPCXLTests(unittest.TestCase):
 
 
 class SystolicTPPNMEnergyTests(unittest.TestCase):
-    def test_fused_activation_and_reductions_are_charged_analytically(self):
+    def test_cent_dev_shared_buffer_exposes_all_32_channels(self):
+        cent_power_calculator.set_channel_count(32, 32)
+        self.assertEqual(
+            cent_power_calculator.SHARED_BUFFER_CAPACITY_BYTES,
+            4 * 1024 * 1024,
+        )
+        self.assertEqual(run_sim.ACCEL_CYCLE["EXP"], 13.0)
+        self.assertEqual(run_sim.ACCEL_CYCLE["VEC"], 4.0)
+
+        args = SimpleNamespace(
+            model="Llama2-70B",
+            num_channels=32,
+            num_banks=16,
+            max_seq_len=4096,
+            kv_head_tp=True,
+            systolic_pim=True,
+            systolic_dim=4,
+            ewmul_pnm=False,
+            flash_attention=False,
+        )
+        latency = run_sim.calculate_acc_latency(args, 4096, tp=1)
+        # EXP + VEC_ADD + two VEC_MUL normalization operations, followed by
+        # the per-head reduction and RISC-V completion work.
+        self.assertAlmostEqual(latency["Softmax_latency"], 0.006984)
+
+    def test_pipelined_softmax_uses_cent_dev_systolic_startup_window(self):
+        common = {
+            "model": "Llama2-70B",
+            "num_channels": 32,
+            "max_seq_len": 131072,
+            "kv_head_tp": True,
+            "systolic_pim": True,
+            "systolic_dim": 4,
+            "ewmul_pnm": False,
+            "flash_attention": True,
+            "flash_attention_block_size": 1024,
+        }
+        expected_factors = {
+            # GDDR6: 16 burst elements x 32 channels x 16 banks = 8192.
+            16: {4096: 1.0, 32768: 1.0 / 4.0, 131072: 1.0 / 16.0},
+            # LPDDR4X: 16 x 32 x 8 = 4096.
+            8: {4096: 1.0, 32768: 1.0 / 8.0, 131072: 1.0 / 32.0},
+        }
+        for banks_per_channel, factors in expected_factors.items():
+            for seqlen, expected_factor in factors.items():
+                with self.subTest(banks=banks_per_channel, seqlen=seqlen):
+                    base = run_sim.calculate_acc_latency(
+                        SimpleNamespace(
+                            num_banks=banks_per_channel,
+                            pipelined_softmax=False,
+                            **common,
+                        ),
+                        seqlen,
+                        tp=1,
+                    )
+                    pipelined = run_sim.calculate_acc_latency(
+                        SimpleNamespace(
+                            num_banks=banks_per_channel,
+                            pipelined_softmax=True,
+                            **common,
+                        ),
+                        seqlen,
+                        tp=1,
+                    )
+                    self.assertAlmostEqual(
+                        pipelined["Softmax_latency"],
+                        base["Softmax_latency"] * expected_factor,
+                    )
+                    # Only Softmax is overlapped; PNM reductions and block
+                    # merge work remain unchanged.
+                    self.assertAlmostEqual(
+                        pipelined["SVReduction_latency"],
+                        base["SVReduction_latency"],
+                    )
+                    self.assertAlmostEqual(
+                        pipelined["FlashAttention_latency"],
+                        base["FlashAttention_latency"],
+                    )
+
+    def test_flash_block_must_fit_the_four_mib_shared_buffer(self):
+        args = SimpleNamespace(
+            model="Llama2-70B",
+            num_channels=32,
+            num_banks=16,
+            max_seq_len=65536,
+            kv_head_tp=True,
+            systolic_pim=True,
+            systolic_dim=4,
+            ewmul_pnm=False,
+            flash_attention=True,
+            flash_attention_block_size=65536,
+        )
+        with self.assertRaisesRegex(ValueError, "shared buffer"):
+            run_sim.calculate_acc_latency(args, 65536, tp=1)
+
+    def test_systolic_forces_ewmul_pnm_and_explicit_flag_controls_vector_path(self):
+        common = {
+            "model": "Llama2-70B",
+            "num_channels": 32,
+            "num_banks": 16,
+            "max_seq_len": 4096,
+            "kv_head_tp": True,
+            "systolic_dim": 4,
+            "flash_attention": False,
+        }
+        forced = run_sim.calculate_acc_latency(
+            SimpleNamespace(
+                systolic_pim=True,
+                ewmul_pnm=False,
+                **common,
+            ),
+            4096,
+            8,
+        )
+        disabled = run_sim.calculate_acc_latency(
+            SimpleNamespace(
+                systolic_pim=False,
+                ewmul_pnm=False,
+                **common,
+            ),
+            4096,
+            8,
+        )
+        explicit = run_sim.calculate_acc_latency(
+            SimpleNamespace(
+                systolic_pim=False,
+                ewmul_pnm=True,
+                **common,
+            ),
+            4096,
+            8,
+        )
+        self.assertTrue(
+            run_sim.ewmul_pnm_enabled(
+                SimpleNamespace(systolic_pim=True, ewmul_pnm=False)
+            )
+        )
+        self.assertGreater(forced["EWMULActivation_latency"], 0.0)
+        self.assertNotIn("EWMULActivation_latency", disabled)
+        self.assertEqual(
+            explicit["EWMULActivation_latency"],
+            forced["EWMULActivation_latency"],
+        )
+
+    def test_flash_attention_uses_the_cent_dev_block_merge_term(self):
+        common = {
+            "model": "Llama2-70B",
+            "num_channels": 32,
+            "num_banks": 16,
+            "max_seq_len": 4096,
+            "kv_head_tp": True,
+            "systolic_pim": True,
+            "systolic_dim": 4,
+            "ewmul_pnm": False,
+            "flash_attention": True,
+            "flash_attention_block_size": 1024,
+        }
+        latency = run_sim.calculate_acc_latency(
+            SimpleNamespace(**common), 4096, tp=1
+        )
+        expected = (
+            4 * 64 / 16.0 / 32.0 * run_sim.ACCEL_CYCLE["VEC"]
+            / (run_sim.FREQ / run_sim.KILO)
+        )
+        self.assertAlmostEqual(latency["FlashAttention_latency"], expected)
+
+    def test_ewmul_and_reductions_are_charged_analytically(self):
         energy = cent_power_calculator.kv_head_tp_pnm_dynamic_energy(
             {"tCK_ps": 500.0},
-            repack_elements=32,
             reduction_adds=16,
-            activation_elements=16,
+            ewmul_elements=16,
         )
         self.assertGreater(energy["SB_DYN"], 0.0)
         self.assertGreater(energy["IB_DYN"], 0.0)
-        self.assertGreater(energy["EXP_DYN"], 0.0)
+        self.assertEqual(energy["EXP_DYN"], 0.0)
         self.assertGreater(energy["VEC_DYN"], 0.0)
+        self.assertGreater(energy["VEC_MUL_DYN"], 0.0)
 
 
 class KVHeadTPRunnerTests(unittest.TestCase):

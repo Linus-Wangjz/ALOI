@@ -14,7 +14,7 @@ columns per pass.
 | Kernel | TP semantics | Physical layout | Reduction |
 | --- | --- | --- | --- |
 | Q | output-column parallel | enough channels to hold the local Q outputs; remaining channel groups split K | PNM across channel groups |
-| K/V | output-column parallel, fused | K and V columns share one physical row region; all channel groups split K | PNM across channel groups, then cache repack |
+| K/V | output-column parallel, fused | K and V columns share one physical row region; all channel groups split K | PNM across channel groups; cache writes remain explicit `W MEM` commands |
 | KQ | local attention | K is sequence-striped across the KV head's banks | none across devices |
 | SV | local attention | V uses both independent 8-lane halves of `MAC_output_systolic_pim` | PNM across context groups |
 | Wo | row parallel | all 512 banks produce 8192 partial outputs | one hidden-vector TP all-reduce |
@@ -55,35 +55,60 @@ Every new systolic kernel emits the migrated command protocol:
 per kernel, utilization, physical rows, fused aliases, and PNM reduction work.
 
 The end-to-end and microbenchmark power paths share the fitted PIM coefficients
-for SA heights 1/2/4/8/16: 1.12/1.43/2.05/3.07/7.09.  PNM cache repack,
-Q/KV/SV reductions, and fused `SiLU(W1) * W3` are charged analytically to the
-shared-buffer, instruction-buffer, EXP, and vector units.
+for SA heights 1/2/4/8/16: 1.12/1.43/2.05/3.07/7.09.  Q/KV/SV reductions are
+charged analytically to the shared-buffer and
+instruction-buffer units.  K/V cache updates remain explicit `W MEM` commands.
+
+The device-level shared buffer matches the cent_dev hardware point: 4 MiB
+split into 32 independently accessible 128-bit banks/ports, for 512 B/cycle
+aggregate I/O. `--parallel-sram` defaults to 32. Thus 32 PIM channel streams
+are serviced in one SRAM-I/O round (`EXP=13`, `VEC=4` cycles at 32 channels),
+instead of being serialized through the legacy 16 B/cycle path. The cent_dev
+4 MiB/32-bank SRAM static and dynamic power coefficients are used as well.
+FlashAttention score blocks are checked against the 4 MiB capacity.
+
+`--pipelined-softmax` enables the separate cent_dev producer/consumer overlap
+model. The full Softmax work and energy are retained, but its exposed latency
+is multiplied by
+`min(16 * channels * banks, sequence_length) / sequence_length` for systolic
+PIM. Consequently the factor is 1 at 4K for both GDDR6 and LPDDR4X; at
+32K/128K it is 1/4 and 1/16 for GDDR6, and 1/8 and 1/32 for LPDDR4X. This
+option is analytical only and does not change the QK/SV Ramulator trace.
+
+Softmax additionally includes two 16-lane `VEC_MUL` operations per
+`sequence_length * local_heads / 16` element group. They model the two
+normalization multiplies and are charged in both accelerator latency and
+dynamic energy, using the same banked-SRAM `VEC_MUL` cycle/coefficient as the
+cent_dev-compatible PNM vector path.
+
+Element-wise multiplication follows cent_dev's `--EWMUL_PNM` behavior.
+The flag moves RMSNorm, Q/K RoPE, and the multiply in `SiLU(W1) * W3` to the
+PNM `VEC_MUL` path.  Systolic PIM forces this behavior on even when the flag is
+not written explicitly; the CSV records both the requested and effective
+values.  The imported in-array `AF`/`RD_AF` commands on W1 output tiles remain
+in the trace: they form the SiLU result, while PNM performs the subsequent
+element-wise multiplication with W3.  The trace variant records the effective
+EWMUL mode, so incompatible legacy `--activation` results are not reused.
 
 ## PP=80, TP=1, context=4K comparison
 
 The comparison uses SA=4x16, batch=1, the same GDDR6 Ramulator configuration,
 and the same Cellar power tables.  A single block trace is simulated and then
-scaled to 80 pipeline blocks.  The identical one-hidden-vector PP handoff is
-included on both sides using one PCIe lane/device (144 lanes divided across 80
-devices with the existing integer allocation policy).
+scaled to 80 pipeline blocks.  Both imported and mapped systolic paths use the
+effective EWMUL_PNM behavior while retaining W1's in-array AF/RD_AF commands.
+The identical one-hidden-vector PP handoff is included on
+both sides using one PCIe lane/device (144 lanes divided across 80 devices with
+the existing integer allocation policy).
 
-| Metric | Imported implementation | Standard TP mapping | Delta |
-| --- | ---: | ---: | ---: |
-| trace commands/block | 37,773 | 36,006 | -4.68% |
-| `MAC_ABK` cycles/block | 118,472 | 109,040 | -7.96% |
-| latency/block including PP handoff | 0.303731 ms | 0.290219 ms | -4.45% |
-| serial 80-block token latency | 24.2985 ms | 23.2176 ms | -4.45% |
-| energy/block including PP handoff | 16.2841 mJ | 15.9401 mJ | -2.11% |
-| 80-block energy/token | 1302.73 mJ | 1275.21 mJ | -2.11% |
-| steady 80-stage power | 4289.08 W | 4393.93 W | +2.44% |
-
-The new trace is faster mainly because fused K/V and W1/W3 remove fill, drain,
-GB-write, and result-drain commands.  Its accelerator overhead is higher
-(0.039593 ms versus 0.030567 ms/block) because channel-group reductions, cache
-repack, and fused activation are now explicit PNM work.  Energy falls less than
-latency, so the fully occupied 80-stage steady-state power rises slightly even
-though energy per token falls.  These structural differences are why numerical
-agreement with the imported implementation is neither expected nor required.
+The report is generated rather than hard-coded: it is written as
+`comparison_metrics.csv`, `comparison_metrics.png`, and
+`comparison_metrics.pdf`.  This avoids mixing incompatible legacy activation
+provenance or old KV-repack accounting in a single table.  The new trace is faster mainly because
+fused K/V and W1/W3 remove fill, drain, GB-write, and result-drain commands.
+Channel-group reductions and element-wise multiplies remain explicit analytical
+PNM work, while AF/RD_AF remains a PIM trace command.  These structural
+differences are why numerical agreement with the imported implementation is
+neither expected nor required.
 
 Reproduce the report with `scripts/compare_systolic_tp_traces.py`, optionally
 passing both Ramulator logs to include the latency and energy comparison.
@@ -113,3 +138,38 @@ implementation. `floor(resident_requests / batch)` determines resident batch
 groups, and `min(groups, PP) / PP` is applied as pipeline utilization. The
 equal-power figures contain six CENT bars per context (two architectures by
 three memories), with DGX H100 shown as a line.
+
+### Re-running and overwriting this campaign
+
+The commands below rerun the same 7B/70B, GDDR6/LPDDR4X, 4K/32K/128K SA=4x16
+campaign into the existing
+`output/kv_head_tp_systolic_all_context/raw/systolic_4x16` directory. They
+reuse valid Ramulator traces/logs and refresh CSV post-processing; this is
+sufficient for an accelerator-only accounting change such as Softmax
+`VEC_MUL`.
+
+```bash
+cd /home/linuswang/Documents/CENT/cent_simulation
+MPLCONFIGDIR=/tmp/cent_mpl /home/linuswang/miniforge3/envs/cent/bin/python \
+  scripts/run_cent_memory_cases.py --kv-head-tp-systolic \
+  --models Llama2-7B,Llama2-70B \
+  --cases GDDR6,LPDDR4X_nCCD2,LPDDR4X_nCCD6 \
+  --EWMUL_PNM --flash-attention --flash-attention-block-size 1024
+
+MPLCONFIGDIR=/tmp/cent_mpl /home/linuswang/miniforge3/envs/cent/bin/python \
+  scripts/analyze_kv_head_tp_systolic_all_context.py \
+  --flash-attention --flash-attention-block-size 1024
+```
+
+`update_csv` retains rows with explicitly incompatible legacy `--activation`
+provenance for audit. The analyzer excludes them, so the above refresh
+overwrites the effective campaign and analysis. To physically replace the
+three raw result CSVs too, remove exactly the following files before the first
+command; traces and Ramulator logs remain intact and are reused.
+
+```bash
+rm -f \
+  output/kv_head_tp_systolic_all_context/raw/systolic_4x16/GDDR6/simulation_results_decode_only_long_context_midpoint.csv \
+  output/kv_head_tp_systolic_all_context/raw/systolic_4x16/LPDDR4X/simulation_results_decode_only_long_context_midpoint_nCCD2.csv \
+  output/kv_head_tp_systolic_all_context/raw/systolic_4x16/LPDDR4X/simulation_results_decode_only_long_context_midpoint_nCCD6.csv
+```

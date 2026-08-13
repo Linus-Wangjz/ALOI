@@ -46,19 +46,38 @@ RV_RMSNorm_CYCLE = CELLAR_POWER_CALCULATOR.RV_RMSNorm_CYCLE
 RV_ROTEmbed_CYCLE = CELLAR_POWER_CALCULATOR.RV_ROTEmbed_CYCLE
 RV_SFT_CYCLE_PIPELINE = CELLAR_POWER_CALCULATOR.RV_SFT_CYCLE_PIPELINE
 RV_SFT_CYCLE_SINGLE = CELLAR_POWER_CALCULATOR.RV_SFT_CYCLE_SINGLE
+SRAM_IO_PARALLEL = float(CELLAR_POWER_CALCULATOR.SRAM_IO_PARALLEL)
+SHARED_BUFFER_CAPACITY_BYTES = int(
+    CELLAR_POWER_CALCULATOR.SHARED_BUFFER_CAPACITY_BYTES
+)
 ACCEL_CYCLE = dict(CELLAR_POWER_CALCULATOR.ACCEL_CYCLE)
 
 
-def set_channel_count(channels_per_device):
-    """Keep CENT's exported constants and Cellar's mutable globals aligned."""
-    global CH_PER_DV
+def set_channel_count(channels_per_device, sram_io_parallel=None):
+    """Keep CENT's channel count and banked-SRAM model aligned with Cellar."""
+    global CH_PER_DV, SRAM_IO_PARALLEL
     CH_PER_DV = float(channels_per_device)
+    if sram_io_parallel is not None:
+        if sram_io_parallel <= 0:
+            raise ValueError("sram_io_parallel must be positive")
+        SRAM_IO_PARALLEL = float(sram_io_parallel)
     ACCEL_CYCLE.clear()
     ACCEL_CYCLE.update({
-        "EXP": CH_PER_DV * SB_RD_CYCLE + EXP_LANE_CYCLE + SB_WR_CYCLE,
-        "VEC": CH_PER_DV * 2.00 * SB_RD_CYCLE + 1.00 + SB_WR_CYCLE,
+        "EXP": (
+            CH_PER_DV / SRAM_IO_PARALLEL * SB_RD_CYCLE
+            + EXP_LANE_CYCLE
+            + SB_WR_CYCLE
+        ),
+        "VEC": (
+            CH_PER_DV / SRAM_IO_PARALLEL * 2.00 * SB_RD_CYCLE
+            + 1.00
+            + SB_WR_CYCLE
+        ),
     })
+    ACCEL_CYCLE["VEC_ADD"] = ACCEL_CYCLE["VEC"]
+    ACCEL_CYCLE["VEC_MUL"] = ACCEL_CYCLE["VEC"]
     CELLAR_POWER_CALCULATOR.CH_PER_DV = CH_PER_DV
+    CELLAR_POWER_CALCULATOR.SRAM_IO_PARALLEL = SRAM_IO_PARALLEL
     CELLAR_POWER_CALCULATOR.ACCEL_CYCLE = dict(ACCEL_CYCLE)
 
 
@@ -126,6 +145,7 @@ def _analytical_dynamic_energy_by_operation(
         "RED_DYN": 2.0 * ACCEL_POWER["RED"]["DYN"] * scale,
         "EXP_DYN": 0.0,
         "VEC_DYN": 2.0 * rms_hidden / 16.0 / 16.0 * ACCEL_POWER["VEC"]["DYN"] * scale,
+        "VEC_MUL_DYN": 0.0,
     }
     softmax = {
         "SB_DYN": (
@@ -138,6 +158,14 @@ def _analytical_dynamic_energy_by_operation(
         "RED_DYN": Head * ACCEL_POWER["RED"]["DYN"] * scale,
         "EXP_DYN": Tokens * Head / 16.0 * ACCEL_POWER["EXP"]["DYN"] * scale,
         "VEC_DYN": Tokens * Head / 16.0 * ACCEL_POWER["VEC"]["DYN"] * scale,
+        "VEC_MUL_DYN": (
+            Tokens
+            * Head
+            / 16.0
+            * ACCEL_POWER["VEC_MUL"]["DYN"]
+            * 2.0
+            * scale
+        ),
     }
     rotary = {
         "SB_DYN": gqa_factor
@@ -154,6 +182,7 @@ def _analytical_dynamic_energy_by_operation(
         "RED_DYN": 0.0,
         "EXP_DYN": 0.0,
         "VEC_DYN": 0.0,
+        "VEC_MUL_DYN": 0.0,
     }
     return {
         "RMSNorm": rmsnorm,
@@ -163,42 +192,42 @@ def _analytical_dynamic_energy_by_operation(
 
 
 def kv_head_tp_pnm_dynamic_energy(
-    stat, *, repack_elements, reduction_adds, activation_elements=0
+    stat, *, reduction_adds, ewmul_elements=0
 ):
-    """Analytical energy for device-local TP repacking, reduction, and SiLU.
+    """Analytical energy for device-local TP reduction and PNM EWMUL.
 
     These device-local PNM operations intentionally do not appear in the
-    Ramulator trace.  Repacking moves BF16 K/V projection outputs through the
-    shared buffer; reduction combines the per-bank SV partials with the
-    16-lane vector unit.  ``activation_elements`` accounts for the fused
-    W1/W3 SiLU and multiply: one EXP-class operation and two vector operations
-    per 16 elements.  Returned terms use Cellar's mJ convention and can be
-    added directly to one rank's ``power_calculator`` result.
+    Ramulator trace.  Reduction combines the channel-group partials with the
+    16-lane vector-add unit. ``ewmul_elements`` counts scalar element-wise
+    multiplies moved from PIM to PNM across RMSNorm, RoPE, and
+    ``SiLU(W1) * W3``. Every 16 elements issue one VEC_MUL operation with two
+    shared-buffer reads and one write. K/V cache writes are represented by
+    their explicit ``W MEM`` trace commands.
+    Returned terms use Cellar's mJ convention and can be added directly to one
+    rank's ``power_calculator`` result.
     """
 
-    if repack_elements < 0 or reduction_adds < 0 or activation_elements < 0:
+    if reduction_adds < 0 or ewmul_elements < 0:
         raise ValueError("PNM work counts cannot be negative")
     scale = stat["tCK_ps"] / 1e12
-    repack_groups = math.ceil(repack_elements / 16.0)
     reduction_groups = math.ceil(reduction_adds / 16.0)
-    activation_groups = math.ceil(activation_elements / 16.0)
+    ewmul_groups = math.ceil(ewmul_elements / 16.0)
     sb = SRAM_POWER["SB"]
     return {
         "SB_DYN": (
-            repack_groups * (sb["RD"] + sb["WR"])
-            + reduction_groups * (2.0 * sb["RD"] + sb["WR"])
-            + activation_groups * (3.0 * sb["RD"] + sb["WR"])
+            reduction_groups * (2.0 * sb["RD"] + sb["WR"])
+            + ewmul_groups * (2.0 * sb["RD"] + sb["WR"])
         ) * scale,
-        "IB_DYN": (
-            repack_groups + reduction_groups + activation_groups
-        ) * SRAM_POWER["IB"]["RD"] * scale,
-        "EXP_DYN": (
-            activation_groups * ACCEL_POWER["EXP"]["DYN"] * scale
-        ),
+        "IB_DYN": (reduction_groups + ewmul_groups)
+        * SRAM_POWER["IB"]["RD"]
+        * scale,
+        "EXP_DYN": 0.0,
         "VEC_DYN": (
-            (reduction_groups + 2.0 * activation_groups)
-            * ACCEL_POWER["VEC"]["DYN"]
+            reduction_groups * ACCEL_POWER["VEC_ADD"]["DYN"]
             * scale
+        ),
+        "VEC_MUL_DYN": (
+            ewmul_groups * ACCEL_POWER["VEC_MUL"]["DYN"] * scale
         ),
     }
 

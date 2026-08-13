@@ -47,7 +47,12 @@ class TransformerBlock(PIM):
         self.full_accelerator_softmax = args.full_accelerator_softmax
         self.flash_attention = args.flash_attention
         self.flash_attention_block_size = args.flash_attention_block_size
-        self.EWMUL_PNM = args.EWMUL_PNM
+        # Match cent_dev: systolic PIM always moves element-wise multiplies to
+        # the PNM vector multiplier, even when the CLI flag was not explicit.
+        self.EWMUL_PNM = bool(
+            getattr(args, "systolic_pim", False)
+            or getattr(args, "EWMUL_PNM", False)
+        )
         self.systolic_pim = args.systolic_pim
         self.systolic_dim = args.systolic_dim
         self.batch_size = args.batch_size
@@ -1225,6 +1230,34 @@ class TransformerBlock(PIM):
                     active_rows=active_rows,
                 )
 
+    def _trace_fused_activation_systolic_pim_only_trace(self, output_dim):
+        """Emit the legacy AF/RD_AF sequence for fused W1/W3.
+
+        The standard TP layout packs W1 and W3 into one fused region, while
+        the imported in-array activation applies to W1's output columns.  This
+        keeps the original command behavior: one AF and one RD_AF for every
+        systolic row and W1 output tile.  The command dialect has only a
+        channel mask, so its partial final tile uses the full active-channel
+        mask, matching the original trace implementation.
+        """
+
+        layout = self.systolic_tp_layout
+        if layout is None:
+            raise ValueError("standard systolic TP layout is not enabled")
+        if output_dim < 1:
+            return
+        device_capacity = layout.total_banks * layout.burst_length
+        for tile_start in range(0, output_dim, device_capacity):
+            tile_outputs = min(device_capacity, output_dim - tile_start)
+            active_channels = math.ceil(
+                tile_outputs / layout.output_columns_per_channel
+            )
+            channels = list(range(active_channels))
+            for _ in range(self.systolic_dim):
+                self.AF_only_trace(channels)
+            for _ in range(self.systolic_dim):
+                self.RD_AF_only_trace(channels)
+
     def Vector_Matrix_Mul_score_systolic_tp_only_trace(
         self, row_index_matrix, seqlen, timing="breakdown_sa_score"
     ):
@@ -1269,6 +1302,60 @@ class TransformerBlock(PIM):
                 "sv_" + sv.mode,
                 dual_half_operand=True,
             )
+
+    def Vector_Matrix_Mul_flash_attention_systolic_tp_only_trace(
+        self, k_cache_row_index_matrix, v_cache_row_index_matrix, seqlen
+    ):
+        """Trace cent_dev-style block FlashAttention for the TP layout.
+
+        Each context block drains its QK result and immediately consumes the
+        normalized score stream in SV.  As in cent_dev, the online-softmax
+        state and the RD_MAC-to-WR_GB hand-off are represented by the
+        analytical accelerator model rather than explicit PNM commands.  In
+        particular, no score workspace is materialized with W_MEM/R_MEM.
+
+        The block row strides deliberately follow the imported cent_dev
+        schedule.  They are command-address strides for the trace dialect,
+        not a separate replacement for the Device--Channel--Bank cache
+        placement used for KV cache writes.
+        """
+
+        layout = self.systolic_tp_layout
+        if layout is None:
+            raise ValueError("standard systolic TP layout is not enabled")
+        if seqlen < 1:
+            return
+
+        block_size = self.flash_attention_block_size
+        flash_attention_blocks = math.ceil(seqlen / block_size)
+        k_rows_per_vector = math.ceil(
+            layout.shape.head_dim * layout.shape.local_kv_heads
+            / layout.dram_columns
+        )
+        k_sequence_iterations = math.ceil(block_size / layout.total_banks)
+        k_rows_per_block = k_sequence_iterations * k_rows_per_vector
+        v_rows_per_block = math.ceil(block_size / layout.dram_columns)
+
+        for flash_attention_block in range(flash_attention_blocks):
+            block_seqlen = min(
+                block_size,
+                seqlen - flash_attention_block * block_size,
+            )
+            k_cache_row_index = (
+                k_cache_row_index_matrix
+                + flash_attention_block * k_rows_per_block
+            )
+            v_cache_row_index = (
+                v_cache_row_index_matrix
+                + flash_attention_block * v_rows_per_block
+            )
+            self.Vector_Matrix_Mul_score_systolic_tp_only_trace(
+                k_cache_row_index, block_seqlen
+            )
+            if not self.trace_score:
+                self.Vector_Matrix_Mul_output_systolic_tp_only_trace(
+                    v_cache_row_index, block_seqlen
+                )
 
     def systolic_tp_cache_rows_per_batch(self):
         """Return the contiguous per-request K/V row strides for this TP rank."""

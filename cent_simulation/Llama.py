@@ -772,13 +772,13 @@ class TransformerBlockLlama(TransformerBlock):
 
         input_vector_neighbor_bank_length = (self.dim - 1) // (self.total_banks // 2) + 1
         input_vector_neighbor_bank_utilized_banks = (self.dim - 1) // input_vector_neighbor_bank_length + 1
-        if self.trace_norm:
+        if self.trace_norm and not self.EWMUL_PNM:
             self.store_for_neighbor_bank_input_only_trace(self.channels_per_block, input_vector_neighbor_bank_utilized_banks, 0, self.x_row_index, input_vector_neighbor_bank_length)
             self.store_for_neighbor_bank_input_only_trace(self.channels_per_block, input_vector_neighbor_bank_utilized_banks, 1, self.x_row_index, input_vector_neighbor_bank_length)
 
         # RMSNorm   x.pow   MAC_ABK
         input_vector_MAB_BK_BK_length = (self.dim - 1) // (total_banks // 2) + 1
-        if self.trace_norm:
+        if self.trace_norm and not self.EWMUL_PNM:
             self.WR_BIAS_only_trace(channel_lst)
             self.MAC_ABK_only_trace(channel_lst, self.x_row_index, (input_vector_MAB_BK_BK_length - 1) // self.burst_length + 1, "breakdown_sa_pow")
             self.RD_MAC_only_trace(channel_lst)
@@ -788,7 +788,7 @@ class TransformerBlockLlama(TransformerBlock):
         # Broadcast a scalar to vector and store it for EWMUL
         input_vector_EWMUL_length = (self.dim - 1) // (total_banks // 4) + 1
         input_vector_EWMUL_utilized_banks = (self.dim - 1) // input_vector_EWMUL_length + 1
-        if self.trace_norm:
+        if self.trace_norm and not self.EWMUL_PNM:
             self.time["WR_SBK"] += self.timing_constant["WR_SBK"] + self.dim // self.burst_length
             self.store_for_EWMUL_input_only_trace(channels_required, input_vector_EWMUL_utilized_banks, 0, self.x_copy_row_index, input_vector_EWMUL_length)
             self.store_for_EWMUL_input_only_trace(channels_required, input_vector_EWMUL_utilized_banks, 1, self.x_copy_row_index, input_vector_EWMUL_length)
@@ -829,7 +829,7 @@ class TransformerBlockLlama(TransformerBlock):
             kv_ewmul_length = (kv_dim - 1) // (total_banks // 4) + 1
             q_ewmul_banks = (q_dim - 1) // q_ewmul_length + 1
             kv_ewmul_banks = (kv_dim - 1) // kv_ewmul_length + 1
-            if not self.kv_head_tp:
+            if not self.kv_head_tp and not self.EWMUL_PNM:
                 self.time["WR_SBK"] += self.timing_constant["WR_SBK"] + q_dim * 2 // self.burst_length
                 self.store_for_EWMUL_input_only_trace(channels_required, q_ewmul_banks, 1, self.xq_row_index, q_ewmul_length * 2)
                 self.time["WR_SBK"] += self.timing_constant["WR_SBK"] + kv_dim * 2 // self.burst_length
@@ -997,6 +997,7 @@ class TransformerBlockLlama(TransformerBlock):
         if self.trace_norm:
             self.EWADD_only_trace(self.dim // self.burst_length)
 
+        if self.trace_norm and not self.EWMUL_PNM:
             # RMSNorm   sa.pow   MAC_ABK
             self.time["WR_SBK"] += self.timing_constant["WR_SBK"] + self.dim // self.burst_length
             self.store_for_neighbor_bank_input_only_trace(channels_required, input_vector_neighbor_bank_utilized_banks, 0, self.sa_copy_row_index, input_vector_neighbor_bank_length)
@@ -1037,7 +1038,7 @@ class TransformerBlockLlama(TransformerBlock):
             self.Vector_Matrix_Mul_weight_pim_only_trace(channel_lst, self.w3_row_index, self.dim, ffn_dim, FC_total_banks, "breakdown_ffn_weight")
 
         # AF
-        if self.trace_activation:
+        if self.trace_activation and not self.EWMUL_PNM:
             iteration_required = ffn_dim > self.channels_per_block * (self.num_banks // 4) * self.DRAM_column
             if iteration_required:
                 iteration_0 = total_banks // 4 * self.DRAM_column
@@ -1378,30 +1379,9 @@ class TransformerBlockLlama(TransformerBlock):
                     self.cache_v_row_index + batch_index * v_rows_per_batch
                 )
                 if self.flash_attention:
-                    blocks = math.ceil(seqlen / self.flash_attention_block_size)
-                    for block in range(blocks):
-                        block_seqlen = min(
-                            self.flash_attention_block_size,
-                            seqlen - block * self.flash_attention_block_size,
-                        )
-                        self.Vector_Matrix_Mul_score_systolic_tp_only_trace(
-                            k_batch_base, block_seqlen
-                        )
-                        self.store_for_score_only_trace(
-                            self.scores_row_index,
-                            self.FC_total_banks,
-                            block_seqlen,
-                        )
-                        self.SYNC_only_trace()
-                        self.load_for_score_only_trace(
-                            self.scores_row_index,
-                            self.FC_total_banks,
-                            block_seqlen,
-                        )
-                        self.SYNC_only_trace()
-                        self.Vector_Matrix_Mul_output_systolic_tp_only_trace(
-                            v_batch_base, block_seqlen
-                        )
+                    self.Vector_Matrix_Mul_flash_attention_systolic_tp_only_trace(
+                        k_batch_base, v_batch_base, seqlen
+                    )
                 else:
                     self.Vector_Matrix_Mul_score_systolic_tp_only_trace(
                         k_batch_base, seqlen
@@ -1418,12 +1398,19 @@ class TransformerBlockLlama(TransformerBlock):
                         v_batch_base, seqlen
                     )
         elif self.trace_score:
-            k_rows_per_batch, _ = self.systolic_tp_cache_rows_per_batch()
+            k_rows_per_batch, v_rows_per_batch = self.systolic_tp_cache_rows_per_batch()
             for batch_index in range(self.batch_size):
-                self.Vector_Matrix_Mul_score_systolic_tp_only_trace(
-                    self.cache_k_row_index + batch_index * k_rows_per_batch,
-                    seqlen,
-                )
+                k_batch_base = self.cache_k_row_index + batch_index * k_rows_per_batch
+                if self.flash_attention:
+                    self.Vector_Matrix_Mul_flash_attention_systolic_tp_only_trace(
+                        k_batch_base,
+                        self.cache_v_row_index + batch_index * v_rows_per_batch,
+                        seqlen,
+                    )
+                else:
+                    self.Vector_Matrix_Mul_score_systolic_tp_only_trace(
+                        k_batch_base, seqlen
+                    )
 
         if self.trace_fc_kqvo:
             self.Vector_Matrix_Mul_weight_systolic_tp_only_trace(
@@ -1440,8 +1427,15 @@ class TransformerBlockLlama(TransformerBlock):
                 self.w1_row_index,
                 "breakdown_ffn_weight",
             )
-            # SiLU(W1) * W3 is a PNM operation over the local FFN shard.
-            self.SYNC_only_trace()
+            # cent_dev keeps the in-array AF/RD_AF work independent of where
+            # the subsequent element-wise multiplies execute.
+            self._trace_fused_activation_systolic_pim_only_trace(
+                layout.shape.local_ffn_dim
+            )
+            if self.EWMUL_PNM:
+                # SiLU(W1) * W3 is consumed by PNM after both fused outputs
+                # are available.
+                self.SYNC_only_trace()
             self.Vector_Matrix_Mul_weight_systolic_tp_only_trace(
                 layout.w2, self.w2_row_index, "breakdown_ffn_weight"
             )

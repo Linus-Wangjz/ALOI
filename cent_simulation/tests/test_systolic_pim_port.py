@@ -32,14 +32,16 @@ class SystolicPIMPortTest(unittest.TestCase):
 
     def test_systolic_trace_variant_isolated_by_shape_and_flash_block(self):
         args = SimpleNamespace(
+            systolic_pim=True,
             systolic_dim=8,
             batch_size=8,
+            ewmul_pnm=False,
             flash_attention=True,
             flash_attention_block_size=4096,
         )
         self.assertEqual(
             run_sim.systolic_trace_variant(args),
-            "systolic_pim_8_batch_size_8_flash_4096",
+            "systolic_pim_8_batch_size_8_ewmul_pnm_1_flash_4096",
         )
 
     def test_trace_methods_are_merged_into_existing_classes(self):

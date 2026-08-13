@@ -142,13 +142,26 @@ def simulated_comparison(args: argparse.Namespace) -> dict:
         max_seq_len=args.context,
         systolic_height=args.sa_height,
     )
+    ewmul_elements = (
+        6 * args.dim
+        + args.dim
+        + args.dim // args.gqa
+        + 2 * args.ffn_dim
+    )
+    original_energy = add_energy_terms(
+        original_energy,
+        kv_head_tp_pnm_dynamic_energy(
+            original_stat,
+            reduction_adds=0,
+            ewmul_elements=ewmul_elements,
+        ),
+    )
     mapped_energy = add_energy_terms(
         mapped_energy,
         kv_head_tp_pnm_dynamic_energy(
             mapped_stat,
-            repack_elements=2 * shape.local_kv_dim,
             reduction_adds=sum(layout.pnm_reduction_adds(args.context).values()),
-            activation_elements=shape.local_ffn_dim,
+            ewmul_elements=ewmul_elements,
         ),
     )
     scale_args = SimpleNamespace(
@@ -164,6 +177,7 @@ def simulated_comparison(args: argparse.Namespace) -> dict:
         "max_seq_len": args.context,
         "systolic_pim": True,
         "systolic_dim": args.sa_height,
+        "ewmul_pnm": True,
     }
     original_acc = run_sim.calculate_acc_latency(
         SimpleNamespace(kv_head_tp=False, **common_latency_args), args.context

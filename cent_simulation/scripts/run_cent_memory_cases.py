@@ -421,6 +421,16 @@ def run_model_case(
                         "--systolic-dim", "4",
                         "--batch-size", str(batch_size),
                     ])
+                    if args.ewmul_pnm:
+                        workload_cmd.append("--EWMUL_PNM")
+                    if args.flash_attention:
+                        workload_cmd.extend([
+                            "--flash-attention",
+                            "--flash-attention-block-size",
+                            str(args.flash_attention_block_size),
+                        ])
+                    if args.pipelined_softmax:
+                        workload_cmd.append("--pipelined-softmax")
                 run(workload_cmd + [
                     "--seqlen", str(active_seqlen),
                     "--max-seq-len", str(context_window),
@@ -439,6 +449,16 @@ def run_model_case(
                     "--systolic-dim", "4",
                     "--batch-size", str(batch_size),
                 ])
+                if args.ewmul_pnm:
+                    workload_cmd.append("--EWMUL_PNM")
+                if args.flash_attention:
+                    workload_cmd.extend([
+                        "--flash-attention",
+                        "--flash-attention-block-size",
+                        str(args.flash_attention_block_size),
+                    ])
+                if args.pipelined_softmax:
+                    workload_cmd.append("--pipelined-softmax")
             run(
                 workload_cmd
                 + ["--seqlen", *(str(active_seqlen) for _, active_seqlen in contexts)],
@@ -544,6 +564,39 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--EWMUL_PNM",
+        "--EWMUL-PNM",
+        "--ewmul-pnm",
+        dest="ewmul_pnm",
+        action="store_true",
+        help=(
+            "Explicitly request cent_dev PNM element-wise multiplies. "
+            "Systolic PIM enables the same behavior implicitly."
+        ),
+    )
+    parser.add_argument(
+        "--flash-attention",
+        action="store_true",
+        help=(
+            "Use the cent_dev-style block FlashAttention trace for "
+            "--kv-head-tp-systolic."
+        ),
+    )
+    parser.add_argument(
+        "--flash-attention-block-size",
+        type=int,
+        default=1024,
+        help="Context tokens per FlashAttention block (default: 1024).",
+    )
+    parser.add_argument(
+        "--pipelined-softmax",
+        action="store_true",
+        help=(
+            "Use the cent_dev Softmax/QK overlap model for "
+            "--kv-head-tp-systolic. This changes analytical latency only."
+        ),
+    )
+    parser.add_argument(
         "--batch-sizes",
         type=parse_int_list,
         help=(
@@ -571,6 +624,12 @@ def main() -> int:
         raise ValueError("KV-head TP modes and --master-attention are mutually exclusive")
     if args.kv_head_tp and args.kv_head_tp_systolic:
         raise ValueError("--kv-head-tp and --kv-head-tp-systolic are mutually exclusive")
+    if args.flash_attention and not args.kv_head_tp_systolic:
+        raise ValueError("--flash-attention requires --kv-head-tp-systolic")
+    if args.pipelined_softmax and not args.kv_head_tp_systolic:
+        raise ValueError("--pipelined-softmax requires --kv-head-tp-systolic")
+    if args.flash_attention_block_size < 1:
+        raise ValueError("--flash-attention-block-size must be positive")
     if args.batch_sizes is not None and not args.kv_head_tp_systolic:
         raise ValueError("--batch-sizes is only valid with --kv-head-tp-systolic")
     if (args.kv_head_tp or args.kv_head_tp_systolic) and args.balanced_envelope:

@@ -14,7 +14,6 @@ CENT_SIM = Path(__file__).resolve().parents[1]
 ROOT = CENT_SIM.parent
 DEFAULT_OUTPUT = CENT_SIM / "output/kv_head_tp_systolic_all_context/comparison"
 DEFAULT_TRACE = CENT_SIM / "trace/kv_head_tp_systolic_all_context/comparison"
-VARIANT = "systolic_pim_4_batch_size_1"
 
 
 def parse_args() -> argparse.Namespace:
@@ -42,6 +41,8 @@ def main() -> int:
     output_dir = args.output_dir.resolve()
     trace_dir = args.trace_dir.resolve()
     python = sys.executable
+    direct_variant = "systolic_pim_4_batch_size_1_ewmul_pnm_1"
+    mapped_variant = direct_variant
     common = [
         python,
         "run_sim.py",
@@ -58,6 +59,7 @@ def main() -> int:
         "--systolic-pim",
         "--systolic-dim", "4",
         "--batch-size", "1",
+        "--EWMUL_PNM",
         "--generate_trace",
         "--simulate_trace",
         "--update_csv",
@@ -98,22 +100,22 @@ def main() -> int:
 
     direct_trace = (
         direct_trace_root
-        / VARIANT
+        / direct_variant
         / "model_parallel/Llama2-70B/trace_1_FC_devices_seqlen_4096.txt"
     )
     mapped_trace = (
         mapped_trace_root
-        / VARIANT
+        / mapped_variant
         / "model_parallel_kv_head_main/Llama2-70B/trace_1_FC_devices_seqlen_4096.txt"
     )
     direct_log = (
         direct_log_root
-        / VARIANT
+        / direct_variant
         / "model_parallel/Llama2-70B/trace_1_FC_devices_seqlen_4096.txt.log"
     )
     mapped_log = (
         mapped_log_root
-        / VARIANT
+        / mapped_variant
         / "model_parallel_kv_head_main/Llama2-70B/trace_1_FC_devices_seqlen_4096.txt.log"
     )
     compare = [
@@ -139,6 +141,8 @@ def main() -> int:
             "tensor_parallelism": 1,
             "batch_size": 1,
             "systolic_array": "4x16",
+            "ewmul_pnm_requested": True,
+            "ewmul_pnm_effective": True,
             "memory": "GDDR6",
             "direct_port": "trace_only_systolic_PIM",
             "mapped": "trace_only_systolic_TP",

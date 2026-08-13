@@ -66,7 +66,12 @@ def get_args():
     parser.add_argument("--full-accelerator-softmax", action="store_true")
     parser.add_argument("--flash-attention", action="store_true")
     parser.add_argument("--flash-attention-block-size", type=int, default=1024)
-    parser.add_argument("--EWMUL-PNM", action="store_true")
+    parser.add_argument(
+        "--EWMUL-PNM",
+        "--EWMUL_PNM",
+        dest="EWMUL_PNM",
+        action="store_true",
+    )
     parser.add_argument("--systolic-pim-microbench", action="store_true")
     parser.add_argument("--microbench", type=str)
     parser.add_argument("--systolic-pim", action="store_true")

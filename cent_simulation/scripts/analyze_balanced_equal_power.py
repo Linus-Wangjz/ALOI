@@ -144,7 +144,7 @@ def non_dram_static_power_w(channels_per_device: int = CHANNELS_PER_DEVICE) -> f
         + cent.SRAM_POWER["IB"]["STT"]
         + sum(
             cent.ACCEL_POWER[name]["STT"] * channels_per_device
-            for name in ("RED", "EXP", "VEC")
+            for name in ("RED", "EXP", "VEC", "VEC_MUL")
         )
         + 0.5 * (cent.ACCEL_POWER["CTR"]["STT"] + cent.ACCEL_POWER["CTR"]["DYN"])
     )
@@ -326,6 +326,10 @@ def load_tp_sources(
     dram_energy_model: str,
     attention_mapping: str = "inter_device",
     batch_size: int | None = None,
+    flash_attention: bool | None = None,
+    flash_attention_block_size: int | None = None,
+    pipelined_softmax: bool | None = None,
+    ewmul_pnm_effective: bool | None = None,
 ) -> dict[int, pd.Series]:
     if not path.exists():
         raise FileNotFoundError(f"missing source CSV: {path}")
@@ -348,6 +352,35 @@ def load_tp_sources(
         if "Batch size" not in subset.columns:
             raise ValueError(f"{path} is missing Batch size")
         subset = subset[subset["Batch size"] == batch_size]
+    if flash_attention is not None:
+        if "Flash attention" not in subset.columns:
+            raise ValueError(f"{path} is missing Flash attention provenance")
+        subset = subset[subset["Flash attention"].astype(bool) == flash_attention]
+        if flash_attention and flash_attention_block_size is not None:
+            if "Flash attention block size" not in subset.columns:
+                raise ValueError(
+                    f"{path} is missing Flash attention block size provenance"
+                )
+            subset = subset[
+                subset["Flash attention block size"] == flash_attention_block_size
+            ]
+    if pipelined_softmax is not None:
+        if "Pipelined softmax" not in subset.columns:
+            raise ValueError(f"{path} is missing Pipelined softmax provenance")
+        subset = subset[
+            subset["Pipelined softmax"].astype(bool) == pipelined_softmax
+        ]
+    if ewmul_pnm_effective is not None:
+        required_ewmul = {"EWMUL PNM effective", "EWMUL PNM provenance"}
+        if not required_ewmul.issubset(subset.columns):
+            raise ValueError(
+                f"{path} uses legacy --activation provenance; regenerate it "
+                "with the --EWMUL_PNM model"
+            )
+        subset = subset[
+            (subset["EWMUL PNM effective"] == ewmul_pnm_effective)
+            & (subset["EWMUL PNM provenance"] == "native")
+        ]
     subset = subset[
         subset["Pipeline parallelism"] * subset["Tensor parallelism"]
         == subset["Device number"]
@@ -971,9 +1004,9 @@ traces, for 48 functional traces total.
 - For V heads with more than 128 banks, channels are split into 128-bank
   groups. Each group stores all 128 head dimensions for one context slice,
   broadcasts only its local score slice through the unmodified shared GB, and
-  uses `MAC_ABK`. The final cross-group 128-dimension element-wise add and
-  local K/V repacking are analytical PNM postprocessing; no `MAC_SBK` or
-  bank-private GB is used.
+  uses `MAC_ABK`. The final cross-group 128-dimension element-wise add is
+  analytical PNM postprocessing; K/V cache updates remain explicit `W MEM`
+  trace commands. No `MAC_SBK` or bank-private GB is used.
 - PP and DP are post-processing. Pipeline fill, PRE_STBY waiting power, and the
   nearest integer DP neighbors around the DGX H100 power target are retained.
 - CXL traffic is two full-D gathers plus two full-D broadcasts per block,

@@ -47,6 +47,22 @@ class DeviceRoleEnergyTest(unittest.TestCase):
         self.assertEqual(energy, self.energy)
         self.assertEqual(latency, self.latency)
 
+    def test_softmax_charges_two_vec_mul_operations(self):
+        expected = (
+            self.tokens
+            * self.heads
+            / 16.0
+            * cent.ACCEL_POWER["VEC_MUL"]["DYN"]
+            * 2.0
+            * self.stat["tCK_ps"]
+            / 1e12
+        )
+        self.assertAlmostEqual(
+            self.phases["Softmax"]["VEC_MUL_DYN"], expected
+        )
+        self.assertEqual(self.phases["RMSNorm"]["VEC_MUL_DYN"], 0.0)
+        self.assertEqual(self.phases["RotEmbed"]["VEC_MUL_DYN"], 0.0)
+
     def test_inter_device_helper_keeps_only_rotary_analytic_energy(self):
         energy, latency = self.calculate("inter_device_helper")
         for component in self.phases["RotEmbed"]:
