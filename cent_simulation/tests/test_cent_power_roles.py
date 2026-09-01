@@ -47,6 +47,29 @@ class DeviceRoleEnergyTest(unittest.TestCase):
         self.assertEqual(energy, self.energy)
         self.assertEqual(latency, self.latency)
 
+    def test_accelerator_table_matches_cent_dev_7nm_model(self):
+        self.assertNotIn("VEC", cent.ACCEL_POWER)
+        expected = {
+            "RED": (5.62e-02, 2.32e-01, 5.62e03),
+            "EXP": (3.39e-02, 5.60e-01, 1.28e04),
+            "VEC_ADD": (1.33e-01, 2.48e-01, 6.54e03),
+            "VEC_MUL": (1.12e-01, 2.25e-01, 2.95e03),
+            "TOPK": (2.92e-02, 7.47e-01, 3.77e03),
+        }
+        for name, (switch, internal, leak) in expected.items():
+            power = cent.ACCEL_POWER[name]
+            self.assertEqual(power["SWITCH"], switch)
+            self.assertEqual(power["INT"], internal)
+            self.assertEqual(power["LEAK"], leak)
+            self.assertAlmostEqual(power["DYN"], switch + internal)
+            self.assertAlmostEqual(power["STT"], leak / 1e6)
+        self.assertEqual(cent.ACCEL_POWER["RV"], 3.96)
+
+    def test_operation_terms_use_vec_add_not_legacy_vec(self):
+        for operation in self.phases.values():
+            self.assertIn("VEC_ADD_DYN", operation)
+            self.assertNotIn("VEC_DYN", operation)
+
     def test_softmax_charges_two_vec_mul_operations(self):
         expected = (
             self.tokens

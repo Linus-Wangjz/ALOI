@@ -98,9 +98,11 @@ def component_groups(scope: str, dram_energy_model: str) -> dict[str, list[str]]
         "DQ_IO": ["DQ"],
         "CTRL_PHY": ["MEM_CTR"],
         "SRAM_STT": ["GB_STT", "SB_STT", "IB_STT"],
-        "ACCEL_STT": ["RED_STT", "EXP_STT", "VEC_STT"],
+        "ACCEL_STT": [
+            "RED_STT", "EXP_STT", "VEC_ADD_STT", "VEC_MUL_STT", "CTR_STT", "TOPK_STT"
+        ],
         "SRAM_DYN": ["GB_RD", "GB_WR", "SB_DYN", "IB_DYN"],
-        "ACCEL_DYN": ["RV_DYN", "RED_DYN", "EXP_DYN", "VEC_DYN", "DV_CTR"],
+        "ACCEL_DYN": ["RV_DYN", "RED_DYN", "EXP_DYN", "VEC_ADD_DYN", "VEC_MUL_DYN", "DV_CTR"],
         "PCIe": ["PCIe"],
     }
 
@@ -110,9 +112,11 @@ SYSTEM_GROUPS = {
     "DQ_IO": ["DQ"],
     "CTRL_PHY": ["MEM_CTR"],
     "SRAM_STT": ["GB_STT", "SB_STT", "IB_STT"],
-    "ACCEL_STT": ["RED_STT", "EXP_STT", "VEC_STT"],
+    "ACCEL_STT": [
+        "RED_STT", "EXP_STT", "VEC_ADD_STT", "VEC_MUL_STT", "CTR_STT", "TOPK_STT"
+    ],
     "SRAM_DYN": ["GB_RD", "GB_WR", "SB_DYN", "IB_DYN"],
-    "ACCEL_DYN": ["RV_DYN", "RED_DYN", "EXP_DYN", "VEC_DYN", "DV_CTR"],
+    "ACCEL_DYN": ["RV_DYN", "RED_DYN", "EXP_DYN", "VEC_ADD_DYN", "VEC_MUL_DYN", "DV_CTR"],
     "PCIe": ["PCIe"],
 }
 
@@ -141,11 +145,7 @@ def parse_context_specs(raw: str) -> list[tuple[str, int]]:
 
 
 def set_cent_channel_count(ch_per_dv: int) -> None:
-    cent.CH_PER_DV = float(ch_per_dv)
-    cent.ACCEL_CYCLE = {
-        "EXP": cent.CH_PER_DV * cent.SB_RD_CYCLE + cent.EXP_LANE_CYCLE + cent.SB_WR_CYCLE,
-        "VEC": cent.CH_PER_DV * 2.00 * cent.SB_RD_CYCLE + 1.00 + cent.SB_WR_CYCLE,
-    }
+    cent.set_channel_count(ch_per_dv)
 
 
 def display_path(path: Path) -> str:

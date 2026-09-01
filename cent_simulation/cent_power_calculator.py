@@ -43,7 +43,8 @@ SB_RD_CYCLE = CELLAR_POWER_CALCULATOR.SB_RD_CYCLE
 SB_WR_CYCLE = CELLAR_POWER_CALCULATOR.SB_WR_CYCLE
 EXP_LANE_CYCLE = CELLAR_POWER_CALCULATOR.EXP_LANE_CYCLE
 RV_RMSNorm_CYCLE = CELLAR_POWER_CALCULATOR.RV_RMSNorm_CYCLE
-RV_ROTEmbed_CYCLE = CELLAR_POWER_CALCULATOR.RV_ROTEmbed_CYCLE
+RV_ROTEmbed_CYCLE_PIPELINE = CELLAR_POWER_CALCULATOR.RV_ROTEmbed_CYCLE_PIPELINE
+RV_ROTEmbed_CYCLE_SINGLE = CELLAR_POWER_CALCULATOR.RV_ROTEmbed_CYCLE_SINGLE
 RV_SFT_CYCLE_PIPELINE = CELLAR_POWER_CALCULATOR.RV_SFT_CYCLE_PIPELINE
 RV_SFT_CYCLE_SINGLE = CELLAR_POWER_CALCULATOR.RV_SFT_CYCLE_SINGLE
 SRAM_IO_PARALLEL = float(CELLAR_POWER_CALCULATOR.SRAM_IO_PARALLEL)
@@ -68,14 +69,17 @@ def set_channel_count(channels_per_device, sram_io_parallel=None):
             + EXP_LANE_CYCLE
             + SB_WR_CYCLE
         ),
-        "VEC": (
+        "VEC_ADD": (
+            CH_PER_DV / SRAM_IO_PARALLEL * 2.00 * SB_RD_CYCLE
+            + 1.00
+            + SB_WR_CYCLE
+        ),
+        "VEC_MUL": (
             CH_PER_DV / SRAM_IO_PARALLEL * 2.00 * SB_RD_CYCLE
             + 1.00
             + SB_WR_CYCLE
         ),
     })
-    ACCEL_CYCLE["VEC_ADD"] = ACCEL_CYCLE["VEC"]
-    ACCEL_CYCLE["VEC_MUL"] = ACCEL_CYCLE["VEC"]
     CELLAR_POWER_CALCULATOR.CH_PER_DV = CH_PER_DV
     CELLAR_POWER_CALCULATOR.SRAM_IO_PARALLEL = SRAM_IO_PARALLEL
     CELLAR_POWER_CALCULATOR.ACCEL_CYCLE = dict(ACCEL_CYCLE)
@@ -144,7 +148,9 @@ def _analytical_dynamic_energy_by_operation(
         "RV_DYN": 2.0 * RV_RMSNorm_CYCLE * ACCEL_POWER["RV"] * scale,
         "RED_DYN": 2.0 * ACCEL_POWER["RED"]["DYN"] * scale,
         "EXP_DYN": 0.0,
-        "VEC_DYN": 2.0 * rms_hidden / 16.0 / 16.0 * ACCEL_POWER["VEC"]["DYN"] * scale,
+        "VEC_ADD_DYN": (
+            2.0 * rms_hidden / 16.0 / 16.0 * ACCEL_POWER["VEC_ADD"]["DYN"] * scale
+        ),
         "VEC_MUL_DYN": 0.0,
     }
     softmax = {
@@ -157,7 +163,7 @@ def _analytical_dynamic_energy_by_operation(
         "RV_DYN": Head * RV_SFT_CYCLE_SINGLE * ACCEL_POWER["RV"] * scale,
         "RED_DYN": Head * ACCEL_POWER["RED"]["DYN"] * scale,
         "EXP_DYN": Tokens * Head / 16.0 * ACCEL_POWER["EXP"]["DYN"] * scale,
-        "VEC_DYN": Tokens * Head / 16.0 * ACCEL_POWER["VEC"]["DYN"] * scale,
+        "VEC_ADD_DYN": Tokens * Head / 16.0 * ACCEL_POWER["VEC_ADD"]["DYN"] * scale,
         "VEC_MUL_DYN": (
             Tokens
             * Head
@@ -176,12 +182,12 @@ def _analytical_dynamic_energy_by_operation(
         "IB_DYN": gqa_factor * HiddenDim * ib_read * scale,
         "RV_DYN": gqa_factor
         * HiddenDim
-        * RV_ROTEmbed_CYCLE
+        * RV_ROTEmbed_CYCLE_SINGLE
         * ACCEL_POWER["RV"]
         * scale,
         "RED_DYN": 0.0,
         "EXP_DYN": 0.0,
-        "VEC_DYN": 0.0,
+        "VEC_ADD_DYN": 0.0,
         "VEC_MUL_DYN": 0.0,
     }
     return {
@@ -222,7 +228,7 @@ def kv_head_tp_pnm_dynamic_energy(
         * SRAM_POWER["IB"]["RD"]
         * scale,
         "EXP_DYN": 0.0,
-        "VEC_DYN": (
+        "VEC_ADD_DYN": (
             reduction_groups * ACCEL_POWER["VEC_ADD"]["DYN"]
             * scale
         ),
@@ -327,7 +333,10 @@ def power_calculator(
         for component in old_rms:
             energy[component] += new_rms[component] - old_rms[component]
         tck_ps = stat["tCK_ps"]
-        rms_cycles = rmsnorm_hidden_dim / 16.0 / 16.0 / CH_PER_DV * ACCEL_CYCLE["VEC"]
+        rms_cycles = (
+            rmsnorm_hidden_dim / 16.0 / 16.0 / CH_PER_DV
+            * ACCEL_CYCLE["VEC_ADD"]
+        )
         rms_cycles += SB_RD_CYCLE + SB_WR_CYCLE + 1.0 + RV_RMSNorm_CYCLE
         latency["RMSNorm_latency"] = 2.0 * rms_cycles * tck_ps / GIGA
     return _filter_energy_for_device_role(

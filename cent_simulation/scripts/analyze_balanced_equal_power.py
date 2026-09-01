@@ -144,8 +144,10 @@ def non_dram_static_power_w(channels_per_device: int = CHANNELS_PER_DEVICE) -> f
         + cent.SRAM_POWER["IB"]["STT"]
         + sum(
             cent.ACCEL_POWER[name]["STT"] * channels_per_device
-            for name in ("RED", "EXP", "VEC", "VEC_MUL")
+            for name in ("RED", "EXP", "VEC_ADD", "VEC_MUL", "CTR", "TOPK")
         )
+        # Cellar charges CTR's static component per channel and its legacy
+        # dispatcher activity as the device-level DV_CTR term.
         + 0.5 * (cent.ACCEL_POWER["CTR"]["STT"] + cent.ACCEL_POWER["CTR"]["DYN"])
     )
     return milliwatts / 1000.0
@@ -726,16 +728,20 @@ def write_plots(
     deployments: pd.DataFrame,
     energy_breakdown: pd.DataFrame,
     output_dir: Path,
+    scalar_memory_colors: dict[str, str] | None = None,
 ) -> None:
     import matplotlib.pyplot as plt
 
     plt.style.use("seaborn-v0_8-whitegrid")
     memories = list(MEMORY_CASES)
-    colors = {
+    default_scalar_colors = {
         "GDDR6": SEABORN_COLORBLIND[0],
         "LPDDR4X_nCCD2": SEABORN_COLORBLIND[1],
         "LPDDR4X_nCCD6": SEABORN_COLORBLIND[2],
     }
+    colors = scalar_memory_colors or default_scalar_colors
+    if set(colors) != set(memories):
+        raise ValueError("scalar memory colors must cover exactly the memory cases")
     labels = [f"{model.replace('Llama2-', '')}\n{context}" for model in MODEL_CONFIG for context in CONTEXTS]
     x = list(range(len(labels)))
     width = 0.24
@@ -1107,6 +1113,8 @@ def main(
     default_experiment_root: Path = DEFAULT_EXPERIMENT_ROOT,
     default_attention_mapping: str = "inter_device",
     default_tp_values: tuple[int, ...] | None = None,
+    scalar_memory_colors: dict[str, str] | None = None,
+    presentation_writer=None,
 ) -> int:
     args = parse_args(
         default_experiment_root=default_experiment_root,
@@ -1228,7 +1236,26 @@ def main(
     )
 
     if not args.no_plots:
-        write_plots(selected, deployments, energy_breakdown, output_dir)
+        if presentation_writer is None:
+            write_plots(
+                selected,
+                deployments,
+                energy_breakdown,
+                output_dir,
+                scalar_memory_colors=scalar_memory_colors,
+            )
+        else:
+            presentation_writer(
+                selected=selected,
+                deployments=deployments,
+                dgx=dgx,
+                output_dir=output_dir,
+                memory_cases=MEMORY_CASES,
+                model_specs=MODEL_SPECS,
+                contexts=CONTEXTS,
+                models=MODEL_CONFIG,
+                project_root=ROOT,
+            )
         print(f"[plots] {display_path(output_dir)}")
 
     summary_columns = [

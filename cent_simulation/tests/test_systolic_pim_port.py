@@ -22,12 +22,12 @@ class SystolicPIMPortTest(unittest.TestCase):
     def test_energy_scaling_matches_cent_dev(self):
         args = SimpleNamespace(batch_size=4, systolic_pim=True, systolic_dim=4)
         adjusted = run_sim.adjust_systolic_energy(
-            {"PIM": 10.0, "SB_DYN": 2.0, "VEC_DYN": 1.0, "ACT/PRE": 3.0},
+            {"PIM": 10.0, "SB_DYN": 2.0, "VEC_ADD_DYN": 1.0, "ACT/PRE": 3.0},
             args,
         )
         self.assertEqual(adjusted["PIM"], 20.5)
         self.assertEqual(adjusted["SB_DYN"], 8.0)
-        self.assertEqual(adjusted["VEC_DYN"], 4.0)
+        self.assertEqual(adjusted["VEC_ADD_DYN"], 4.0)
         self.assertEqual(adjusted["ACT/PRE"], 3.0)
 
     def test_systolic_trace_variant_isolated_by_shape_and_flash_block(self):

@@ -62,7 +62,7 @@ instruction-buffer units.  K/V cache updates remain explicit `W MEM` commands.
 The device-level shared buffer matches the cent_dev hardware point: 4 MiB
 split into 32 independently accessible 128-bit banks/ports, for 512 B/cycle
 aggregate I/O. `--parallel-sram` defaults to 32. Thus 32 PIM channel streams
-are serviced in one SRAM-I/O round (`EXP=13`, `VEC=4` cycles at 32 channels),
+are serviced in one SRAM-I/O round (`EXP=13`, `VEC_ADD=4`, `VEC_MUL=4` cycles at 32 channels),
 instead of being serialized through the legacy 16 B/cycle path. The cent_dev
 4 MiB/32-bank SRAM static and dynamic power coefficients are used as well.
 FlashAttention score blocks are checked against the 4 MiB capacity.

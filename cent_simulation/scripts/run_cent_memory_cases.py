@@ -551,7 +551,7 @@ def main() -> int:
         action="store_true",
         help=(
             "Run the standard KV-head TP mapping with TP=1,2,4,8. Uses fresh "
-            "kv_head_tp_equal_power_all_contexts roots unless overridden."
+            "kv_head_tp_vector_all_context roots unless overridden."
         ),
     )
     parser.add_argument(
@@ -672,9 +672,9 @@ def main() -> int:
                 )
         else:
             if args.output_root == OUTPUT_ROOT:
-                args.output_root = OUTPUT_ROOT / "kv_head_tp_equal_power_all_contexts/raw"
+                args.output_root = OUTPUT_ROOT / "kv_head_tp_vector_all_context/raw"
             if args.trace_root == TRACE_ROOT:
-                args.trace_root = TRACE_ROOT / "kv_head_tp_equal_power_all_contexts"
+                args.trace_root = TRACE_ROOT / "kv_head_tp_vector_all_context"
     if args.balanced_envelope:
         conflicting = [
             option

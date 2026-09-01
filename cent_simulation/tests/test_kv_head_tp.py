@@ -8,7 +8,8 @@ import run_sim
 from TransformerBlock import TransformerBlock
 from Llama import TransformerBlockLlama
 from scripts import run_cent_memory_cases as runner
-from scripts import analyze_kv_head_tp_systolic_all_context as combined_analysis
+from scripts import analyze_kv_head_tp_systolic_all_context as systolic_analysis
+from scripts.utility import campaign_selection
 from tp_mapping import (
     KVHeadTPLayout,
     SystolicTPLayout,
@@ -680,7 +681,8 @@ class SystolicTPPNMEnergyTests(unittest.TestCase):
             4 * 1024 * 1024,
         )
         self.assertEqual(run_sim.ACCEL_CYCLE["EXP"], 13.0)
-        self.assertEqual(run_sim.ACCEL_CYCLE["VEC"], 4.0)
+        self.assertEqual(run_sim.ACCEL_CYCLE["VEC_ADD"], 4.0)
+        self.assertEqual(run_sim.ACCEL_CYCLE["VEC_MUL"], 4.0)
 
         args = SimpleNamespace(
             model="Llama2-70B",
@@ -834,7 +836,7 @@ class SystolicTPPNMEnergyTests(unittest.TestCase):
             SimpleNamespace(**common), 4096, tp=1
         )
         expected = (
-            4 * 64 / 16.0 / 32.0 * run_sim.ACCEL_CYCLE["VEC"]
+            4 * 64 / 16.0 / 32.0 * run_sim.ACCEL_CYCLE["VEC_ADD"]
             / (run_sim.FREQ / run_sim.KILO)
         )
         self.assertAlmostEqual(latency["FlashAttention_latency"], expected)
@@ -848,7 +850,7 @@ class SystolicTPPNMEnergyTests(unittest.TestCase):
         self.assertGreater(energy["SB_DYN"], 0.0)
         self.assertGreater(energy["IB_DYN"], 0.0)
         self.assertEqual(energy["EXP_DYN"], 0.0)
-        self.assertGreater(energy["VEC_DYN"], 0.0)
+        self.assertGreater(energy["VEC_ADD_DYN"], 0.0)
         self.assertGreater(energy["VEC_MUL_DYN"], 0.0)
 
 
@@ -873,7 +875,7 @@ class KVHeadTPRunnerTests(unittest.TestCase):
 
     def test_batch_group_energy_is_reported_per_output_token(self):
         group, token = run_sim.normalize_batch_group_energy(
-            {"PIM": 12.0, "VEC_DYN": 4.0}, 4
+            {"PIM": 12.0, "VEC_ADD_DYN": 4.0}, 4
         )
         self.assertEqual(group, 16.0)
         self.assertEqual(token, 4.0)
@@ -919,11 +921,31 @@ class KVHeadTPRunnerTests(unittest.TestCase):
             288,
         )
 
-    def test_combined_analysis_rejects_old_kv_head_vector_source(self):
-        with self.assertRaisesRegex(ValueError, "balanced_equal_power_all_contexts"):
-            combined_analysis.reject_forbidden_vector_source(
-                "output/kv_head_tp_equal_power_all_contexts/analysis/all_candidates.csv"
-            )
+    def test_systolic_all_context_analysis_has_one_architecture(self):
+        self.assertEqual(systolic_analysis.ARCHITECTURES, ("Systolic 4x16",))
+
+    def test_combined_energy_groups_include_pnm_vec_mul_terms(self):
+        from scripts.utility import system_energy_breakdown
+
+        grouped = system_energy_breakdown.group_system_energy(
+            {
+                "ACT/PRE": 1.0,
+                "PIM": 2.0,
+                "GB_STT": 3.0,
+                "VEC_MUL_STT": 4.0,
+                "SB_DYN": 5.0,
+                "VEC_ADD_DYN": 6.0,
+                "PCIe": 7.0,
+            }
+        )
+        self.assertEqual(grouped["ACT/PRE"], 1.0)
+        self.assertEqual(grouped["PIM"], 2.0)
+        self.assertEqual(grouped["SRAM_STT"], 3.0)
+        self.assertEqual(grouped["ACCEL_STT"], 4.0)
+        self.assertEqual(grouped["SRAM_DYN"], 5.0)
+        self.assertEqual(grouped["ACCEL_DYN"], 6.0)
+        self.assertEqual(grouped["PCIe"], 7.0)
+        self.assertEqual(sum(grouped.values()), 28.0)
 
     def test_batch_groups_can_underfill_an_otherwise_admitted_pipeline(self):
         import pandas as pd
@@ -946,7 +968,7 @@ class KVHeadTPRunnerTests(unittest.TestCase):
                 "Batch size": 4,
             }
         )
-        row = combined_analysis.build_systolic_batch_candidate(
+        row = systolic_analysis.build_systolic_batch_candidate(
             "GDDR6",
             "GDDR6",
             Path("/tmp/source.csv"),
@@ -1006,7 +1028,7 @@ class KVHeadTPRunnerTests(unittest.TestCase):
                 },
             ]
         )
-        selected = combined_analysis.select_equal_power(rows)
+        selected = campaign_selection.select_equal_power(rows)
         self.assertEqual(len(selected), 1)
         self.assertEqual(int(selected.iloc[0]["PP"]), 8)
         self.assertEqual(int(selected.iloc[0]["TP"]), 4)
@@ -1041,7 +1063,7 @@ class KVHeadTPRunnerTests(unittest.TestCase):
                 },
             ]
         )
-        selected = combined_analysis.select_base_objective(
+        selected = campaign_selection.select_base_objective(
             rows, "Throughput / device (tokens/s/device)"
         )
         self.assertEqual(int(selected.iloc[0]["PP"]), 40)

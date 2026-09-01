@@ -12,8 +12,8 @@ import sys
 
 CENT_SIM = Path(__file__).resolve().parents[1]
 ROOT = CENT_SIM.parent
-DEFAULT_OUTPUT = CENT_SIM / "output/kv_head_tp_systolic_all_context/comparison"
-DEFAULT_TRACE = CENT_SIM / "trace/kv_head_tp_systolic_all_context/comparison"
+DEFAULT_OUTPUT = CENT_SIM / "output/kv_head_tp_vector_vs_systolic"
+DEFAULT_TRACE = CENT_SIM / "trace/kv_head_tp_vector_vs_systolic"
 
 
 def parse_args() -> argparse.Namespace:
@@ -154,6 +154,23 @@ def main() -> int:
             "mapped_log": str(mapped_log),
         }
         (output_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
+        (output_dir / "README.md").write_text(
+            """# KV-head Vector vs Systolic mapping comparison
+
+This standalone PP=80, TP=1, batch=1, 4K, GDDR6 comparison contrasts the
+directly ported systolic Vector trace with the Device–Channel-group–Bank
+physical Systolic mapping.  `comparison_metrics.{csv,png,pdf}` contains the
+multi-panel latency, energy, power, and throughput deltas; `manifest.json`
+records the exact trace and Ramulator-log provenance.
+
+Re-run with:
+
+```bash
+/home/linuswang/miniforge3/envs/cent/bin/python \\
+  scripts/run_systolic_mapping_comparison.py
+```
+"""
+        )
     return 0
 
 

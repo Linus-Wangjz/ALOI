@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Combine reused Vector results with the SA4 standard-TP physical mapping.
+"""Analyze only the SA4 Device–Channel-group–Bank KV-head-TP mapping.
 
-The Vector architecture is read only from balanced_equal_power_all_contexts.
-The Systolic architecture is reconstructed from the new 4x16 KV-head-TP
-Ramulator sources.  PP/TP/batch is first fixed by throughput/device inside each
-(architecture, memory, model, context) group, then DP alone scales that base
-layout to the nearest-integer DGX H100 device-power target.
+This script constructs Systolic 4x16 candidates from its Ramulator campaign,
+selects PP/TP/batch within that architecture, and subsequently applies only
+integer DP scaling to reach the DGX H100 device-power reference.  It never
+loads, selects, or plots Vector candidates; use
+``analyze_kv_head_tp_systolic_vs_vector.py`` for the read-only comparison.
 """
 
 from __future__ import annotations
@@ -26,19 +26,29 @@ if str(CENT_SIM) not in sys.path:
     sys.path.insert(0, str(CENT_SIM))
 
 from scripts import analyze_balanced_equal_power as balanced
+from scripts.utility.campaign_selection import (
+    build_all_equal_power_deployments,
+    select_base_objective,
+    select_equal_power,
+)
+from scripts.utility.campaign_plots import plot_grouped_metric
+from scripts.utility.system_energy_breakdown import (
+    build_selected_component_breakdown,
+    plot_selected_component_breakdown,
+)
 
 
 DEFAULT_ROOT = CENT_SIM / "output/kv_head_tp_systolic_all_context"
-DEFAULT_VECTOR_ANALYSIS = CENT_SIM / "output/balanced_equal_power_all_contexts/analysis"
-FORBIDDEN_VECTOR_SOURCE = "kv_head_tp_equal_power_all_contexts"
-ARCHITECTURES = ("Vector", "Systolic 4x16")
+ARCHITECTURES = ("Systolic 4x16",)
 MEMORIES = tuple(balanced.MEMORY_CASES)
 SYSTOLIC_BATCH_SIZES = (1, 2, 3, 4)
-ARCH_HATCH = {"Vector": "", "Systolic 4x16": "///"}
+ARCH_HATCH = {"Systolic 4x16": "///"}
 MEMORY_COLORS = {
-    "GDDR6": balanced.SEABORN_COLORBLIND[0],
-    "LPDDR4X_nCCD2": balanced.SEABORN_COLORBLIND[1],
-    "LPDDR4X_nCCD6": balanced.SEABORN_COLORBLIND[2],
+    # Vega/Altair Category10's first three colors. These apply only to the
+    # scalar memory bars; system-energy components retain their own palette.
+    "GDDR6": "#4C78A8",
+    "LPDDR4X_nCCD2": "#F58518",
+    "LPDDR4X_nCCD6": "#E45756",
 }
 
 
@@ -48,12 +58,6 @@ def parse_args() -> argparse.Namespace:
         "--systolic-raw-root",
         type=Path,
         default=DEFAULT_ROOT / "raw/systolic_4x16",
-    )
-    parser.add_argument(
-        "--vector-analysis",
-        type=Path,
-        default=DEFAULT_VECTOR_ANALYSIS,
-        help="Read-only balanced Vector analysis directory.",
     )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_ROOT / "analysis")
     parser.add_argument(
@@ -92,52 +96,6 @@ def file_sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
-
-
-def reject_forbidden_vector_source(value: object) -> None:
-    if FORBIDDEN_VECTOR_SOURCE in str(value):
-        raise ValueError(
-            "Vector input must come from balanced_equal_power_all_contexts; "
-            f"forbidden source found: {value}"
-        )
-
-
-def load_vector_candidates(vector_analysis: Path) -> tuple[pd.DataFrame, Path]:
-    source = (vector_analysis / "all_candidates.csv").resolve()
-    reject_forbidden_vector_source(source)
-    if not source.exists():
-        raise FileNotFoundError(f"missing reused Vector candidate table: {source}")
-    rows = pd.read_csv(source)
-    required = {
-        "Memory",
-        "Model",
-        "Context",
-        "PP",
-        "TP",
-        "Can host one request",
-        "Replica power (W)",
-        "Replica throughput (tokens/s)",
-    }
-    missing = sorted(required - set(rows.columns))
-    if missing:
-        raise ValueError(f"Vector table is missing columns: {', '.join(missing)}")
-    for value in rows.get("Source CSV", pd.Series(dtype=str)).dropna():
-        reject_forbidden_vector_source(value)
-    rows = rows[
-        rows["Memory"].isin(MEMORIES)
-        & rows["Model"].isin(balanced.MODEL_CONFIG)
-        & rows["Context"].isin(balanced.CONTEXTS)
-    ].copy()
-    rows["Architecture"] = "Vector"
-    rows["Physical mapping"] = "balanced_vector_reused"
-    rows["Batch size"] = 1
-    rows["Max resident requests"] = rows["Max resident microbatch"]
-    rows["Max resident batch groups"] = rows["Max resident microbatch"]
-    rows["Batch groups used"] = rows["Microbatch used"]
-    rows["Resident requests used"] = rows["Microbatch used"]
-    rows["Can host one batch"] = rows["Can host one request"]
-    rows["Projection SA row utilization"] = math.nan
-    return rows, source
 
 
 def build_systolic_batch_candidate(
@@ -476,248 +434,10 @@ def add_architecture_ranks(candidates: pd.DataFrame) -> pd.DataFrame:
     return rows
 
 
-def build_all_equal_power_deployments(
-    candidates: pd.DataFrame,
-    dgx: dict[tuple[str, str], dict[str, float | int]],
-) -> pd.DataFrame:
-    deployments: list[dict[str, object]] = []
-    admitted = candidates[candidates["Can host one batch"].astype(bool)]
-    for _, candidate in admitted.iterrows():
-        reference = dgx[(str(candidate["Model"]), str(candidate["Context"]))]
-        target_power = float(reference["power"])
-        replica_power = float(candidate["Replica power (W)"])
-        local_rows: list[dict[str, object]] = []
-        for rounding, dp in balanced.integer_dp_choices(target_power, replica_power):
-            row = candidate.to_dict()
-            system_power = replica_power * dp
-            system_throughput = float(candidate["Replica throughput (tokens/s)"]) * dp
-            row.update(
-                {
-                    "DP rounding": rounding,
-                    "Continuous ideal DP": target_power / replica_power,
-                    "DP": dp,
-                    "Total devices": int(candidate["Replica devices"]) * dp,
-                    "Resident requests in flight": (
-                        int(candidate["Resident requests used"]) * dp
-                    ),
-                    "System throughput (tokens/s)": system_throughput,
-                    "System power (W)": system_power,
-                    "Power delta vs DGX (W)": system_power - target_power,
-                    "Absolute power delta vs DGX (W)": abs(system_power - target_power),
-                    "Power / DGX H100": system_power / target_power,
-                    "Throughput / DGX H100": system_throughput
-                    / float(reference["throughput"]),
-                    "DGX H100 throughput (tokens/s)": float(reference["throughput"]),
-                    "DGX H100 device-side power (W)": target_power,
-                    "DGX H100 batch": int(reference["batch"]),
-                    "DGX profile model": str(reference["profile_model"]),
-                }
-            )
-            local_rows.append(row)
-        closest = min(float(row["Absolute power delta vs DGX (W)"]) for row in local_rows)
-        for row in local_rows:
-            row["Candidate closest integer DP"] = math.isclose(
-                float(row["Absolute power delta vs DGX (W)"]),
-                closest,
-                rel_tol=0.0,
-                abs_tol=1.0e-12,
-            )
-            deployments.append(row)
-    return pd.DataFrame(deployments)
-
-
-def select_equal_power(deployments: pd.DataFrame) -> pd.DataFrame:
-    """Choose the closest integer DP after PP/TP/batch has been fixed."""
-
-    deployments = deployments.copy()
-    if "Batch size" not in deployments:
-        deployments["Batch size"] = 1
-    winners: list[dict[str, object]] = []
-    group_cols = ["Architecture", "Memory", "Model", "Context"]
-    for group_key, group in deployments.groupby(group_cols):
-        base_layouts = group[["PP", "TP", "Batch size"]].drop_duplicates()
-        if len(base_layouts) != 1:
-            raise ValueError(
-                "equal-power DP scaling received multiple PP/TP/batch bases for "
-                f"{group_key}: {base_layouts.to_dict(orient='records')}"
-            )
-        closest = group[group["Candidate closest integer DP"].astype(bool)]
-        if closest.empty:
-            raise ValueError(f"no closest integer DP marked for {group_key}")
-        ordered = closest.sort_values(
-            [
-                "Absolute power delta vs DGX (W)",
-                "DP",
-            ],
-            ascending=[True, True],
-        )
-        winner = ordered.iloc[0].to_dict()
-        winner["Selection rule"] = (
-            "fixed_best_throughput_per_device_PP_TP_batch_then_nearest_integer_DP_"
-            "then_smaller_DP"
-        )
-        winners.append(winner)
-    selected = pd.DataFrame(winners)
-    expected = len(deployments[group_cols].drop_duplicates())
-    if len(selected) != expected:
-        raise ValueError(f"expected {expected} equal-power winners, found {len(selected)}")
-    return selected
-
-
-def select_base_objective(candidates: pd.DataFrame, metric: str) -> pd.DataFrame:
-    candidates = candidates.copy()
-    if "Can host one batch" not in candidates:
-        candidates["Can host one batch"] = candidates["Can host one request"]
-    if "Batch size" not in candidates:
-        candidates["Batch size"] = 1
-    admitted = candidates[candidates["Can host one batch"].astype(bool)]
-    winners: list[dict[str, object]] = []
-    for _, group in admitted.groupby(["Architecture", "Memory", "Model", "Context"]):
-        best = float(group[metric].max())
-        tied = group[
-            group[metric].map(
-                lambda value: math.isclose(float(value), best, rel_tol=1e-12, abs_tol=1e-15)
-            )
-        ]
-        winners.append(
-            tied.sort_values(
-                ["Replica devices", "PP", "TP", "Batch size"],
-                ascending=[True, True, True, True],
-            ).iloc[0].to_dict()
-        )
-    return pd.DataFrame(winners)
-
-
-def plot_grouped_metric(
-    rows: pd.DataFrame,
-    metric: str,
-    ylabel: str,
-    title: str,
-    output: Path,
-    *,
-    annotation: str | None = None,
-    dgx_line: bool = False,
-    dgx_reference: dict[tuple[str, str], float] | None = None,
-) -> None:
-    import matplotlib.pyplot as plt
-    from matplotlib.patches import Patch
-
-    plt.style.use("seaborn-v0_8-whitegrid")
-    series = [(arch, memory) for arch in ARCHITECTURES for memory in MEMORIES]
-    width = 0.125
-    offsets = [(index - (len(series) - 1) / 2) * width for index in range(len(series))]
-    for model in balanced.MODEL_CONFIG:
-        model_rows = rows[rows["Model"] == model]
-        positions = list(range(len(balanced.CONTEXTS)))
-        fig, ax = plt.subplots(figsize=(10.8, 5.2))
-        reference = None
-        if dgx_line:
-            if dgx_reference is None:
-                reference = (
-                    model_rows.drop_duplicates("Context")
-                    .set_index("Context")
-                    .loc[list(balanced.CONTEXTS), "DGX H100 throughput (tokens/s)"]
-                )
-            else:
-                reference = pd.Series(
-                    {
-                        context: dgx_reference[(model, context)]
-                        for context in balanced.CONTEXTS
-                    }
-                )
-        for offset, (architecture, memory) in zip(offsets, series):
-            subset = (
-                model_rows[
-                    (model_rows["Architecture"] == architecture)
-                    & (model_rows["Memory"] == memory)
-                ]
-                .set_index("Context")
-                .loc[list(balanced.CONTEXTS)]
-            )
-            bars = ax.bar(
-                [position + offset for position in positions],
-                subset[metric],
-                width=width,
-                color=MEMORY_COLORS[memory],
-                hatch=ARCH_HATCH[architecture],
-                edgecolor="black" if architecture != "Vector" else "none",
-                linewidth=0.55,
-            )
-            if annotation:
-                for bar, (context, row) in zip(bars, subset.iterrows()):
-                    if annotation == "equal_power":
-                        label = (
-                            f"{float(row['Throughput / DGX H100']):.2f}x\n"
-                            f"{int(row['PP'])}/{int(row['TP'])}/"
-                            f"B{int(row['Batch size'])}/{int(row['DP'])}"
-                        )
-                    elif annotation == "tokens_per_joule":
-                        if reference is None:
-                            raise ValueError("Tokens/J annotations require a DGX reference")
-                        label = (
-                            f"{float(row[metric]) / float(reference.loc[context]):.2f}x\n"
-                            f"{int(row['PP'])}/{int(row['TP'])}/"
-                            f"B{int(row['Batch size'])}"
-                        )
-                    else:
-                        label = (
-                            f"{int(row['PP'])}/{int(row['TP'])}/"
-                            f"B{int(row['Batch size'])}"
-                        )
-                    ax.annotate(
-                        label,
-                        (bar.get_x() + bar.get_width() / 2, bar.get_height()),
-                        xytext=(0, 3),
-                        textcoords="offset points",
-                        ha="center",
-                        va="bottom",
-                        fontsize=6.4,
-                        rotation=90,
-                        linespacing=0.9,
-                    )
-        if dgx_line:
-            ax.plot(
-                positions,
-                reference,
-                "k--o",
-                linewidth=1.4,
-                markersize=4,
-                label="DGX H100",
-            )
-        ax.set_xticks(positions, list(balanced.CONTEXTS))
-        ax.set_ylabel(ylabel)
-        ax.set_title(f"{model}: {title}")
-        ax.grid(axis="y", alpha=0.25)
-        memory_handles = [
-            Patch(facecolor=MEMORY_COLORS[memory], label=memory) for memory in MEMORIES
-        ]
-        architecture_handles = [
-            Patch(
-                facecolor="white",
-                edgecolor="black",
-                hatch=ARCH_HATCH[architecture],
-                label=architecture,
-            )
-            for architecture in ARCHITECTURES
-        ]
-        handles = memory_handles + architecture_handles
-        if dgx_line:
-            handles.append(ax.lines[-1])
-        ax.legend(handles=handles, frameon=False, ncols=3, fontsize=8)
-        top = max(float(model_rows[metric].max()), 1.0)
-        if dgx_line:
-            top = max(top, float(reference.max()))
-        ax.set_ylim(0.0, top * (1.36 if annotation else 1.18))
-        fig.tight_layout()
-        stem = output.parent / f"{output.name}_{model.replace('Llama2-', '').lower()}"
-        for suffix in ("png", "pdf"):
-            fig.savefig(stem.with_suffix(f".{suffix}"), dpi=220, bbox_inches="tight")
-        plt.close(fig)
-
-
 def write_plots(
     candidates: pd.DataFrame,
     selected_equal_power: pd.DataFrame,
+    component_breakdown: pd.DataFrame,
     dgx: dict[tuple[str, str], dict[str, float | int]],
     output_dir: Path,
 ) -> None:
@@ -731,42 +451,68 @@ def write_plots(
     }
     plot_grouped_metric(
         throughput,
-        "Throughput / device (tokens/s/device)",
-        "Tokens/s/device",
-        "best capacity-admitted PP/TP/batch (labels: PP/TP/B)",
-        output_dir / "best_throughput_per_device",
+        architectures=ARCHITECTURES,
+        memories=MEMORIES,
+        contexts=balanced.CONTEXTS,
+        models=balanced.MODEL_CONFIG,
+        memory_colors=MEMORY_COLORS,
+        architecture_hatches=ARCH_HATCH,
+        metric="Throughput / device (tokens/s/device)",
+        ylabel="Tokens/s/device",
+        title="best capacity-admitted PP/TP/batch (labels: PP/TP/B)",
+        output=output_dir / "best_throughput_per_device",
         annotation="pp_tp",
     )
     plot_grouped_metric(
         efficiency,
-        "Tokens/J",
-        "Tokens/J",
-        "best energy efficiency (labels: token/J/DGX; PP/TP/B)",
-        output_dir / "best_tokens_per_joule",
+        architectures=ARCHITECTURES,
+        memories=MEMORIES,
+        contexts=balanced.CONTEXTS,
+        models=balanced.MODEL_CONFIG,
+        memory_colors=MEMORY_COLORS,
+        architecture_hatches=ARCH_HATCH,
+        metric="Tokens/J",
+        ylabel="Tokens/J",
+        title="best energy efficiency (labels: token/J/DGX; PP/TP/B)",
+        output=output_dir / "best_tokens_per_joule",
         annotation="tokens_per_joule",
         dgx_line=True,
         dgx_reference=dgx_tokens_per_joule,
     )
-    plot_grouped_metric(
-        throughput,
-        "Power / device (W)",
-        "Power/device (W)",
-        "power of throughput/device-selected layouts",
-        output_dir / "selected_power_per_device",
+    plot_selected_component_breakdown(
+        component_breakdown,
+        architectures=ARCHITECTURES,
+        memories=MEMORIES,
+        contexts=balanced.CONTEXTS,
+        models=balanced.MODEL_CONFIG,
+        metric_suffix="energy (mJ/token)",
+        ylabel="Effective token energy (mJ/token)",
+        title="system energy breakdown for throughput/device-selected layouts",
+        output=output_dir / "selected_token_energy",
     )
-    plot_grouped_metric(
-        throughput,
-        "Effective token energy (mJ)",
-        "Effective energy/token (mJ)",
-        "energy of throughput/device-selected layouts",
-        output_dir / "selected_token_energy",
+    plot_selected_component_breakdown(
+        component_breakdown,
+        architectures=ARCHITECTURES,
+        memories=MEMORIES,
+        contexts=balanced.CONTEXTS,
+        models=balanced.MODEL_CONFIG,
+        metric_suffix="power / device (W)",
+        ylabel="Average power per provisioned device (W/device)",
+        title="system power/device breakdown for throughput/device-selected layouts",
+        output=output_dir / "selected_power_per_device",
     )
     plot_grouped_metric(
         selected_equal_power,
-        "System throughput (tokens/s)",
-        "System throughput (tokens/s)",
-        "DGX H100 equal-power winners (labels: throughput/DGX; PP/TP/B/DP)",
-        output_dir / "equal_power_system_throughput",
+        architectures=ARCHITECTURES,
+        memories=MEMORIES,
+        contexts=balanced.CONTEXTS,
+        models=balanced.MODEL_CONFIG,
+        memory_colors=MEMORY_COLORS,
+        architecture_hatches=ARCH_HATCH,
+        metric="System throughput (tokens/s)",
+        ylabel="System throughput (tokens/s)",
+        title="DGX H100 equal-power winners (labels: throughput/DGX; PP/TP/B/DP)",
+        output=output_dir / "equal_power_system_throughput",
         annotation="equal_power",
         dgx_line=True,
     )
@@ -808,10 +554,11 @@ def write_readme(
     )
     text = f"""# KV-head TP Systolic all-context campaign
 
-This directory combines two architectures without rerunning the Vector path:
-
-- **Vector** is read-only reuse of `balanced_equal_power_all_contexts/analysis/all_candidates.csv`.
-- **Systolic 4x16** is the standard Device–Channel-group–Bank KV-head TP mapping.
+This directory contains only the standard **Systolic 4x16**
+Device–Channel-group–Bank KV-head TP mapping.  It does not load, select, or
+plot Vector candidates.  The read-only Vector-versus-Systolic five-metric
+comparison is generated separately by
+`scripts/analyze_kv_head_tp_systolic_vs_vector.py`.
 
 Systolic PIM follows cent_dev and therefore has effective EWMUL_PNM enabled.
 W1 `AF`/`RD_AF` commands remain in the PIM trace; RMSNorm, RoPE, and the fused
@@ -825,23 +572,35 @@ Pipelined Softmax is **{pipelined_softmax}**. When enabled, full Softmax energy
 is retained, while only the cent_dev producer-startup fraction remains exposed
 on the latency critical path.
 
-Both use BF16, 16 GiB/device, the 4K/32K/128K midpoint samples, and GDDR6 plus
-LPDDR4X nCCD2/nCCD6. Vector remains the reused batch-1 baseline; Systolic
-4x16 evaluates batch 1/2/3/4. SA=8x16 is intentionally excluded. The Systolic
-raw campaign has 288 Ramulator jobs (96 per timing) and 192 functional traces
-because both LPDDR timings reuse the same trace set.
+It uses BF16, 16 GiB/device, the 4K/32K/128K midpoint samples, and GDDR6 plus
+LPDDR4X nCCD2/nCCD6. Systolic 4x16 evaluates batch 1/2/3/4. SA=8x16 is
+intentionally excluded. The Systolic raw campaign has 288 Ramulator jobs (96
+per timing) and 192 functional traces because both LPDDR timings reuse the
+same trace set.
 
-Equal power is evaluated independently for every architecture and memory.
-First, throughput/device fixes one capacity-admitted PP/TP/batch layout;
-equal-score ties use fewer replica devices, then smaller PP, TP, and batch.
-Only that fixed layout
-is DP-scaled, retaining both integer DP neighbors around the DGX power target
-for audit and selecting the nearest one (smaller DP on an exact tie). Therefore
-DP packing cannot reselect PP/TP/batch. Each workload has six CENT bars; DGX H100 is
-a line, not a bar.
+`selected_token_energy_*` and `selected_power_per_device_*` are system-energy
+breakdowns for the throughput/device-selected layouts.  Their x-axis hierarchy
+is **context → Systolic 4x16 → G6/X2/X6**; the legend contains only energy
+components. The physical terms use the same palette and grouping as CENT's
+system energy breakdown: DRAM, I/O/controller, SRAM, accelerator, and PCIe.
+`Trace-external waiting` and `Pipeline-bubble waiting` are retained as two
+explicit gray terms because they are part of effective token energy but do not
+come from a Ramulator command.  The audit CSV
+`selected_throughput_energy_component_breakdown.csv` verifies that both the
+energy stack and the per-device-power stack reconstruct their pre-existing
+scalar values exactly. This Systolic-only campaign reconstructs only its own
+source rows; it contains no Vector source-CSV calibration.
+
+Equal power is evaluated for each memory. First, throughput/device fixes one
+capacity-admitted PP/TP/batch layout; equal-score ties use fewer replica
+devices, then smaller PP, TP, and batch. Only that fixed layout is DP-scaled,
+retaining both integer DP neighbors around the DGX power target for audit and
+selecting the nearest one (smaller DP on an exact tie). Therefore DP packing
+cannot reselect PP/TP/batch. Each workload has three CENT bars; DGX H100 is a
+line, not a bar.
 
 Candidates: {len(candidates)} total; {int(candidates['Can host one batch'].astype(bool).sum())} admitted.
-Equal-power winners: {len(winners)} total (six per model/context).
+Equal-power winners: {len(winners)} total (three per model/context).
 
 ## Equal-power winners
 
@@ -875,12 +634,9 @@ def main() -> int:
     if args.device_capacity_gib <= args.reserve_gib:
         raise ValueError("device capacity must exceed reserve")
     raw_root = args.systolic_raw_root.resolve()
-    vector_analysis = args.vector_analysis.resolve()
     output_dir = args.output_dir.resolve()
-    reject_forbidden_vector_source(vector_analysis)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    vector, vector_source = load_vector_candidates(vector_analysis)
     systolic, systolic_manifest = load_systolic_candidates(
         raw_root,
         args.device_capacity_gib,
@@ -890,8 +646,7 @@ def main() -> int:
         args.flash_attention_block_size,
         args.pipelined_softmax,
     )
-    candidates = pd.concat([vector, systolic], ignore_index=True, sort=False)
-    candidates = add_architecture_ranks(candidates).sort_values(
+    candidates = add_architecture_ranks(systolic).sort_values(
         [
             "Model",
             "Context window",
@@ -908,8 +663,18 @@ def main() -> int:
     best_tokens_per_joule = select_base_objective(candidates, "Tokens/J").sort_values(
         ["Model", "Context window", "Architecture", "Memory"]
     )
+    component_breakdown = build_selected_component_breakdown(
+        best_throughput,
+        memory_cases=balanced.MEMORY_CASES,
+        model_specs=balanced.MODEL_SPECS,
+        project_root=ROOT,
+    ).sort_values(
+        ["Model", "Context window", "Architecture", "Memory"]
+    )
     dgx = balanced.load_dgx(args.h100_profile.resolve())
-    deployments = build_all_equal_power_deployments(best_throughput, dgx).sort_values(
+    deployments = build_all_equal_power_deployments(
+        best_throughput, dgx, balanced.integer_dp_choices
+    ).sort_values(
         [
             "Model",
             "Context window",
@@ -941,6 +706,7 @@ def main() -> int:
         "equal_power_selected.csv": winners,
         "best_throughput_per_device.csv": best_throughput,
         "best_tokens_per_joule.csv": best_tokens_per_joule,
+        "selected_throughput_energy_component_breakdown.csv": component_breakdown,
     }
     for filename, frame in outputs.items():
         path = output_dir / filename
@@ -963,13 +729,6 @@ def main() -> int:
         "tp_values": [1, 2, 4, 8],
         "ramulator_jobs": 288,
         "functional_traces": 192,
-        "vector_jobs": 0,
-        "vector_source": {
-            "path": balanced.display_path(vector_source),
-            "sha256": file_sha256(vector_source),
-            "read_only_reuse": True,
-        },
-        "vector_source_policy": "balanced_equal_power_all_contexts_only",
         "systolic_sources": systolic_manifest,
         "selection_rule": (
             "max_throughput_per_device_then_fewer_replica_devices_smaller_PP_TP_batch_"
@@ -977,7 +736,6 @@ def main() -> int:
         ),
     }
     manifest_text = json.dumps(manifest, indent=2) + "\n"
-    reject_forbidden_vector_source(manifest["vector_source"]["path"])
     (output_dir / "manifest.json").write_text(manifest_text)
     write_readme(
         output_dir,
@@ -989,7 +747,7 @@ def main() -> int:
     )
 
     if not args.no_plots:
-        write_plots(candidates, winners, dgx, output_dir)
+        write_plots(candidates, winners, component_breakdown, dgx, output_dir)
         print(f"[plots] {balanced.display_path(output_dir)}")
 
     columns = [

@@ -65,8 +65,8 @@ class BalancedEqualPowerTest(unittest.TestCase):
             self.assertGreater(int(last["Max resident microbatch"]), int(last["PP"]))
 
     def test_waiting_floor_is_single_precharged_policy(self):
-        self.assertAlmostEqual(sweep.waiting_floor_power_w("GDDR6"), 5.960632142607527)
-        self.assertAlmostEqual(sweep.waiting_floor_power_w("LPDDR4X"), 1.2275121426075266)
+        self.assertAlmostEqual(sweep.waiting_floor_power_w("GDDR6"), 5.948777402107201)
+        self.assertAlmostEqual(sweep.waiting_floor_power_w("LPDDR4X"), 1.2156574021072)
 
     def test_partial_fill_power_and_throughput(self):
         # Source values are internally consistent: block=10 ms and 80 blocks=800 ms.

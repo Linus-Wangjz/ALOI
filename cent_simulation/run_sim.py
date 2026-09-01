@@ -13,7 +13,7 @@ from cxl_latency import (
     llama_latency,
     vector_latency,
 )
-from cent_power_calculator import DRAM_ENERGY_MODELS, ACCEL_CYCLE, SHARED_BUFFER_CAPACITY_BYTES, SRAM_IO_PARALLEL, add_energy_terms, kv_head_tp_pnm_dynamic_energy, power_calculator, command_processor, command_trace_prefix_for_log, set_channel_count, KILO, FREQ, SB_RD_CYCLE, SB_WR_CYCLE, RV_RMSNorm_CYCLE, RV_ROTEmbed_CYCLE, RV_SFT_CYCLE_PIPELINE
+from cent_power_calculator import DRAM_ENERGY_MODELS, ACCEL_CYCLE, SHARED_BUFFER_CAPACITY_BYTES, SRAM_IO_PARALLEL, add_energy_terms, kv_head_tp_pnm_dynamic_energy, power_calculator, command_processor, command_trace_prefix_for_log, set_channel_count, KILO, FREQ, SB_RD_CYCLE, SB_WR_CYCLE, RV_RMSNorm_CYCLE, RV_ROTEmbed_CYCLE_PIPELINE, RV_SFT_CYCLE_PIPELINE
 from systolic_power import SYSTOLIC_PIM_POWER_SCALING
 from tp_mapping import KVHeadTPLayout, SystolicTPLayout, kv_head_tp_shape
 from utils import InOut_latency, n_heads, gqa_factor, embedding_size, ffn_size, TransformerBlock_number, minimal_channel_per_block, pipeline_parallel_mode_list, model_parallel_mode_list
@@ -143,7 +143,6 @@ def adjust_systolic_energy(energy, args):
         "RV_DYN",
         "RED_DYN",
         "EXP_DYN",
-        "VEC_DYN",
         "VEC_ADD_DYN",
         "VEC_MUL_DYN",
     ]:
@@ -692,7 +691,7 @@ def calculate_acc_latency(args, seqlen, tp=1, device_role="main"):
         )
     latency["RotEmbed_latency"] = (
         local_hidden + local_kv_hidden
-    ) * RV_ROTEmbed_CYCLE
+    ) * RV_ROTEmbed_CYCLE_PIPELINE
     if ewmul_pnm_enabled(args):
         latency["RotEmbed_latency"] += (
             (local_hidden + local_kv_hidden)

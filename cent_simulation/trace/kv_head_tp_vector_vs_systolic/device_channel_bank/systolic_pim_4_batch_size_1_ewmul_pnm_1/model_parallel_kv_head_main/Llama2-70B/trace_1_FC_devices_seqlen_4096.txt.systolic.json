@@ -1,0 +1,211 @@
+{
+  "array": {
+    "height": 4,
+    "width": 16
+  },
+  "batch_schedule": {
+    "attention_batch_order": "contiguous_cache_blocks",
+    "attention_batches": 1,
+    "projection_rows_per_wave": 4,
+    "projection_waves": 1
+  },
+  "batch_size": 1,
+  "cache_rows_per_batch": {
+    "k": 8,
+    "v": 8
+  },
+  "fused_row_aliases": {
+    "w1_w3": true,
+    "wk_wv": true
+  },
+  "kernel_active_rows": {
+    "fused_kv": [
+      1
+    ],
+    "fused_w1_w3": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "q": [
+      1
+    ],
+    "qk": [
+      4,
+      4,
+      4,
+      4,
+      4,
+      4,
+      4,
+      4
+    ],
+    "sv_paired_kv_heads": [
+      4,
+      4
+    ],
+    "w2": [
+      1
+    ],
+    "wo": [
+      1
+    ]
+  },
+  "kernel_pipeline_cycles": {
+    "fused_kv": {
+      "drain": 0,
+      "fill": 0,
+      "reduction": 2048
+    },
+    "fused_w1_w3": {
+      "drain": 0,
+      "fill": 0,
+      "reduction": 57344
+    },
+    "q": {
+      "drain": 0,
+      "fill": 0,
+      "reduction": 8192
+    },
+    "qk": {
+      "drain": 24,
+      "fill": 24,
+      "reduction": 1024
+    },
+    "sv_paired_kv_heads": {
+      "drain": 24,
+      "fill": 24,
+      "reduction": 1024
+    },
+    "w2": {
+      "drain": 0,
+      "fill": 0,
+      "reduction": 28672
+    },
+    "wo": {
+      "drain": 0,
+      "fill": 0,
+      "reduction": 8192
+    }
+  },
+  "physical_rows_per_bank": {
+    "cache_k": 8,
+    "cache_v": 8,
+    "w1": 896,
+    "w2": 448,
+    "w3": 0,
+    "wk": 32,
+    "wo": 128,
+    "wq": 128,
+    "wv": 0
+  },
+  "pipeline_cycles": {
+    "drain": 48,
+    "fill": 48,
+    "reduction": 106496
+  },
+  "pnm_reduction_adds": {
+    "fused_ffn": 0,
+    "kv": 6144,
+    "q": 0,
+    "sv": 57344
+  },
+  "projections": {
+    "fused_ffn": {
+      "active_channels": 32,
+      "channels_per_group": 32,
+      "fused_operands": 2,
+      "input_dim": 8192,
+      "name": "fused_w1_w3",
+      "output_dim": 57344,
+      "output_tiles": 7,
+      "reduction_groups": 1,
+      "reduction_slice": 8192
+    },
+    "kv": {
+      "active_channels": 32,
+      "channels_per_group": 8,
+      "fused_operands": 2,
+      "input_dim": 8192,
+      "name": "fused_kv",
+      "output_dim": 2048,
+      "output_tiles": 1,
+      "reduction_groups": 4,
+      "reduction_slice": 2048
+    },
+    "q": {
+      "active_channels": 32,
+      "channels_per_group": 32,
+      "fused_operands": 1,
+      "input_dim": 8192,
+      "name": "q",
+      "output_dim": 8192,
+      "output_tiles": 1,
+      "reduction_groups": 1,
+      "reduction_slice": 8192
+    },
+    "w2": {
+      "active_channels": 32,
+      "channels_per_group": 32,
+      "fused_operands": 1,
+      "input_dim": 28672,
+      "name": "w2",
+      "output_dim": 8192,
+      "output_tiles": 1,
+      "reduction_groups": 1,
+      "reduction_slice": 28672
+    },
+    "wo": {
+      "active_channels": 32,
+      "channels_per_group": 32,
+      "fused_operands": 1,
+      "input_dim": 8192,
+      "name": "wo",
+      "output_dim": 8192,
+      "output_tiles": 1,
+      "reduction_groups": 1,
+      "reduction_slice": 8192
+    }
+  },
+  "qk": {
+    "contexts_per_bank": 64,
+    "height_utilization": 1.0,
+    "query_waves": 2,
+    "total_query_waves": 2,
+    "width_utilization": 1.0
+  },
+  "sequence_length": 4096,
+  "shape": {
+    "dim": 8192,
+    "global_ffn_dim": 28672,
+    "global_kv_heads": 8,
+    "global_query_heads": 64,
+    "head_dim": 128,
+    "local_ffn_dim": 28672,
+    "local_kv_dim": 1024,
+    "local_kv_heads": 8,
+    "local_query_dim": 8192,
+    "local_query_heads": 64,
+    "tp": 1
+  },
+  "standard_tp": true,
+  "sv": {
+    "active_lanes_per_bank": 16,
+    "active_systolic_rows": 4,
+    "channels_per_context_group": 1,
+    "channels_per_work_item": 8,
+    "context_groups_per_kv_head": 8,
+    "contexts_per_half": 512,
+    "height_utilization": 1.0,
+    "mode": "paired_kv_heads",
+    "query_waves": 2,
+    "systolic_height": 4,
+    "systolic_width": 16,
+    "width_utilization": 1.0
+  },
+  "tp": 1
+}

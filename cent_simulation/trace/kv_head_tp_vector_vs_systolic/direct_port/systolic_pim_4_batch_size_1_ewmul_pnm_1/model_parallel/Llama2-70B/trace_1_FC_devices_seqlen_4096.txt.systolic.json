@@ -1,0 +1,15 @@
+{
+  "array": {
+    "height": 4,
+    "width": 16
+  },
+  "batch_size": 1,
+  "kernel_active_rows": {},
+  "kernel_pipeline_cycles": {},
+  "pipeline_cycles": {
+    "drain": 0,
+    "fill": 0,
+    "reduction": 0
+  },
+  "standard_tp": false
+}

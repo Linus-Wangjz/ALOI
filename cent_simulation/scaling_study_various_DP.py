@@ -53,10 +53,6 @@ RV_SFT_CYCLE_SINGLE = 16.00 * SB_WR_CYCLE + 2.00 + 1.00 * SB_RD_CYCLE
 
 PCIE_ENERGY = 4.4
 
-for accel_name in ["RED", "EXP", "VEC", "CTR"]:
-    ACCEL_POWER[accel_name]["DYN"] = float(ACCEL_POWER[accel_name]["SWITCH"] + ACCEL_POWER[accel_name]["INT"])
-    ACCEL_POWER[accel_name]["STT"] = float(ACCEL_POWER[accel_name]["LEAK"]) / float(GIGA)
-
 InOut_latency = 0.15
 n_heads = {"Llama2-7B": 32, "Llama2-13B": 40, "Llama2-70B": 64}
 gqa_factor = {"Llama2-7B": 1, "Llama2-13B": 1, "Llama2-70B": 8}
@@ -87,12 +83,13 @@ elif "Llama2" in args.model:
 def calculate_acc_latency(args):
     latency = {}
     GQA_factor = 1.00 + 1.00 / gqa_factor[args.model]
-    latency["RMSNorm_latency"] =  embedding_size[args.model] / 16.00 / 16.00 / args.num_channels * ACCEL_CYCLE["VEC"]    # EMB /16.00 /16.00 ADD
+    latency["RMSNorm_latency"] =  embedding_size[args.model] / 16.00 / 16.00 / args.num_channels * ACCEL_CYCLE["VEC_ADD"]    # EMB /16.00 /16.00 ADD
     latency["RMSNorm_latency"] += SB_RD_CYCLE + SB_WR_CYCLE + 1.00                              # 1 RED
     latency["RMSNorm_latency"] += RV_RMSNorm_CYCLE                                              # 1 RISCV
     latency["RMSNorm_latency"] = float(2.00 * latency["RMSNorm_latency"]) / float(FREQ / KILO)
     latency["Softmax_latency"] =  args.seqlen * n_heads[args.model] / 16.00 / args.num_channels * ACCEL_CYCLE["EXP"]        # TOK*HEAD /16.00 EXP
-    latency["Softmax_latency"] += args.seqlen * n_heads[args.model] / 16.00 / args.num_channels * ACCEL_CYCLE["VEC"]        # TOK*HEAD /16.00 ADD
+    latency["Softmax_latency"] += args.seqlen * n_heads[args.model] / 16.00 / args.num_channels * ACCEL_CYCLE["VEC_ADD"]    # TOK*HEAD /16.00 ADD
+    latency["Softmax_latency"] += args.seqlen * n_heads[args.model] / 16.00 / args.num_channels * ACCEL_CYCLE["VEC_MUL"] * 2.00
     latency["Softmax_latency"] += n_heads[args.model] * 1.00 * SB_RD_CYCLE                                     # HEAD RED
     latency["Softmax_latency"] += n_heads[args.model] * RV_SFT_CYCLE_PIPELINE                                  # HEAD RISCV
     latency["Softmax_latency"] = float(latency["Softmax_latency"]) / float(FREQ / KILO)
@@ -290,4 +287,3 @@ def update_csv(args, device_list):
 
 update_csv(args, device_list)
     
-
