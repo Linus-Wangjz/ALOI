@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Interactive Llama 3.1 70B tensor-parallel and systolic-PIM mapping explorer"
+    />
+    <title>Llama 3.1 70B · Systolic-PIM Mapping Explorer</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <span></span><span></span><span></span>
+          </div>
+          <div>
+            <p class="eyebrow">Systolic-PIM mapping explorer</p>
+            <h1>Llama 3.1 70B</h1>
+          </div>
+        </div>
+
+        <div class="global-controls" aria-label="Global mapping configuration">
+          <fieldset class="segmented-control" data-control="tp">
+            <legend>Tensor parallel</legend>
+            <button type="button" data-value="1">1</button>
+            <button type="button" data-value="2">2</button>
+            <button type="button" data-value="4">4</button>
+            <button type="button" data-value="8" class="is-active">8</button>
+          </fieldset>
+
+          <fieldset class="segmented-control" data-control="context">
+            <legend>Context</legend>
+            <button type="button" data-value="32768" class="is-active">32K</button>
+            <button type="button" data-value="131072">128K</button>
+          </fieldset>
+
+          <fieldset class="segmented-control" data-control="dram">
+            <legend>DRAM</legend>
+            <button type="button" data-value="gddr6" class="is-active">GDDR6</button>
+            <button type="button" data-value="lpddr4x">LPDDR4X</button>
+          </fieldset>
+        </div>
+
+        <div class="fixed-config" title="The systolic-array shape is fixed for this explorer">
+          <span>SA</span>
+          <strong>4×16</strong>
+        </div>
+      </header>
+
+      <nav class="context-bar" aria-label="Visualization breadcrumb">
+        <div id="breadcrumb" class="breadcrumb"></div>
+        <div class="context-actions">
+          <button id="backButton" class="text-button" type="button" hidden>
+            <span aria-hidden="true">←</span> Back
+          </button>
+          <button id="exportButton" class="text-button" type="button" hidden>
+            Export SVG
+          </button>
+        </div>
+      </nav>
+
+      <main>
+        <section id="level1" class="level is-active" aria-labelledby="level1-title">
+          <div class="level-heading">
+            <div>
+              <p class="step-label"><span>01</span> Transformer block</p>
+              <h2 id="level1-title">Choose a kernel to inspect</h2>
+              <p>
+                One representative decoder block is shown. The same TP group executes this
+                mapping sequentially across all 80 layers.
+              </p>
+            </div>
+            <div class="configuration-summary" id="overviewSummary"></div>
+          </div>
+
+          <div class="overview-grid">
+            <article class="transformer-block-card">
+              <div class="block-titlebar">
+                <div>
+                  <span>Decoder layer</span>
+                  <strong>Transformer Block × 80</strong>
+                </div>
+                <div class="tensor-pill">x · [B, 8192]</div>
+              </div>
+
+              <div class="block-flow">
+                <div class="flow-section attention-section">
+                  <div class="section-label">
+                    <span>01</span>
+                    <div><strong>Grouped-query attention</strong><small>64 Q heads · 8 KV heads · d<sub>h</sub> 128</small></div>
+                  </div>
+
+                  <button class="op-node local-op" type="button" data-kernel="rms1">
+                    <span class="node-kind">PNM</span><strong>RMSNorm</strong><small>[B, 8192]</small>
+                  </button>
+                  <div class="flow-arrow" aria-hidden="true">↓</div>
+
+                  <div class="parallel-row two-up">
+                    <button class="op-node matrix-op primary" type="button" data-kernel="q">
+                      <span class="node-kind">GEMM</span><strong>Q projection</strong><small>Wq · 8192 × 8192</small>
+                    </button>
+                    <button class="op-node matrix-op primary" type="button" data-kernel="kv">
+                      <span class="node-kind">FUSED GEMM</span><strong>K / V projections</strong><small>[Wk | Wv] · 8192 × 2048</small>
+                    </button>
+                  </div>
+                  <div class="join-arrow" aria-hidden="true"><span></span><i>↓</i><span></span></div>
+
+                  <button class="op-node local-op wide" type="button" data-kernel="rope">
+                    <span class="node-kind">PNM + WRITE</span><strong>RoPE &amp; KV-cache append</strong><small>Keep a complete KV head and its context on one TP rank</small>
+                  </button>
+                  <div class="flow-arrow" aria-hidden="true">↓</div>
+
+                  <div class="parallel-row three-up">
+                    <button class="op-node matrix-op" type="button" data-kernel="qk">
+                      <span class="node-kind">GEMM</span><strong>Q × Kᵀ</strong><small>Score · [B, 64, L]</small>
+                    </button>
+                    <button class="op-node local-op" type="button" data-kernel="softmax">
+                      <span class="node-kind">PNM</span><strong>Softmax</strong><small>FlashAttention stream</small>
+                    </button>
+                    <button class="op-node matrix-op" type="button" data-kernel="sv">
+                      <span class="node-kind">GEMM</span><strong>Score × V</strong><small>Context aggregation</small>
+                    </button>
+                  </div>
+                  <div class="flow-arrow" aria-hidden="true">↓</div>
+
+                  <div class="parallel-row collective-row">
+                    <button class="op-node matrix-op primary" type="button" data-kernel="wo">
+                      <span class="node-kind">GEMM</span><strong>Output projection</strong><small>Wo · 8192 × 8192</small>
+                    </button>
+                    <div class="collective-badge"><span></span>TP All-Reduce</div>
+                  </div>
+                  <div class="flow-arrow" aria-hidden="true">↓</div>
+                  <button class="op-node local-op" type="button" data-kernel="residual1">
+                    <span class="node-kind">PNM</span><strong>Residual add</strong><small>[B, 8192]</small>
+                  </button>
+                </div>
+
+                <div class="flow-divider"><span>hidden state · [B, 8192]</span></div>
+
+                <div class="flow-section ffn-section">
+                  <div class="section-label">
+                    <span>02</span>
+                    <div><strong>SwiGLU feed-forward network</strong><small>Intermediate dimension 28,672</small></div>
+                  </div>
+
+                  <button class="op-node local-op" type="button" data-kernel="rms2">
+                    <span class="node-kind">PNM</span><strong>RMSNorm</strong><small>[B, 8192]</small>
+                  </button>
+                  <div class="flow-arrow" aria-hidden="true">↓</div>
+
+                  <button class="op-node matrix-op primary wide" type="button" data-kernel="w13">
+                    <span class="node-kind">FUSED GEMM</span><strong>Gate / up projections</strong><small>[W1 | W3] · 8192 × 57,344</small>
+                  </button>
+                  <div class="flow-arrow" aria-hidden="true">↓</div>
+                  <button class="op-node local-op" type="button" data-kernel="silu">
+                    <span class="node-kind">PNM</span><strong>SiLU(W1) × W3</strong><small>[B, 28,672 / TP]</small>
+                  </button>
+                  <div class="flow-arrow" aria-hidden="true">↓</div>
+
+                  <div class="parallel-row collective-row">
+                    <button class="op-node matrix-op primary" type="button" data-kernel="w2">
+                      <span class="node-kind">GEMM</span><strong>Down projection</strong><small>W2 · 28,672 × 8192</small>
+                    </button>
+                    <div class="collective-badge"><span></span>TP All-Reduce</div>
+                  </div>
+                  <div class="flow-arrow" aria-hidden="true">↓</div>
+                  <button class="op-node local-op" type="button" data-kernel="residual2">
+                    <span class="node-kind">PNM</span><strong>Residual add</strong><small>output · [B, 8192]</small>
+                  </button>
+                </div>
+              </div>
+            </article>
+
+            <aside class="overview-aside">
+              <div class="aside-card callout-card">
+                <span class="card-kicker">How to read</span>
+                <h3>Logical first, physical second</h3>
+                <ol>
+                  <li>Click a blue matrix kernel.</li>
+                  <li>Watch the global matrix split across TP devices.</li>
+                  <li>Click one device to inspect its channel and bank mapping.</li>
+                </ol>
+              </div>
+
+              <div class="aside-card">
+                <span class="card-kicker">Communication invariant</span>
+                <div class="invariant-visual">
+                  <span class="local-dot"></span>
+                  <div><strong>Attention stays local</strong><small>QK, Softmax and SV never cross TP devices.</small></div>
+                </div>
+                <div class="invariant-visual">
+                  <span class="collective-dot"></span>
+                  <div><strong>Two collectives</strong><small>Only Wo and W2 produce cross-device all-reduces.</small></div>
+                </div>
+              </div>
+
+              <div class="aside-card legend-card">
+                <span class="card-kicker">Visual language</span>
+                <div><span class="legend-swatch matrix"></span>Persistent matrix / cache</div>
+                <div><span class="legend-swatch gb"></span>Runtime GB operand</div>
+                <div><span class="legend-swatch local"></span>Device-local reduction</div>
+                <div><span class="legend-swatch collective"></span>TP collective</div>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section id="level2" class="level" aria-labelledby="level2-title" hidden>
+          <div class="level-heading compact">
+            <div>
+              <p class="step-label"><span>02</span> Global matrix → TP devices</p>
+              <h2 id="level2-title"></h2>
+              <p id="level2-subtitle"></p>
+            </div>
+            <div class="stage-actions">
+              <button id="replayPartition" class="action-button" type="button">
+                <span aria-hidden="true">↻</span> Replay partition
+              </button>
+            </div>
+          </div>
+
+          <article id="partitionStage" class="visual-stage">
+            <div class="stage-topline">
+              <span id="partitionEquation" class="equation"></span>
+              <span class="schematic-label">Schematic · dimensions are labeled explicitly</span>
+            </div>
+            <div id="partitionViz" class="svg-host" aria-live="polite"></div>
+          </article>
+
+          <div id="partitionFacts" class="fact-grid"></div>
+        </section>
+
+        <section id="level3" class="level" aria-labelledby="level3-title" hidden>
+          <div class="level-heading compact">
+            <div>
+              <p class="step-label"><span>03</span> Local matrix → bank rows</p>
+              <h2 id="level3-title"></h2>
+              <p id="level3-subtitle"></p>
+            </div>
+            <div class="stage-actions">
+              <button id="replayMapping" class="action-button" type="button">
+                <span aria-hidden="true">↻</span> Reset tile mapping
+              </button>
+            </div>
+          </div>
+
+          <article id="physicalStage" class="visual-stage physical-stage">
+            <div class="stage-topline">
+              <span id="physicalEquation" class="equation"></span>
+              <span id="physicalHint" class="interaction-hint">Click the highlighted tile</span>
+            </div>
+            <div id="physicalViz" class="svg-host physical-host" aria-live="polite"></div>
+          </article>
+
+          <div id="physicalFacts" class="fact-grid physical-facts"></div>
+        </section>
+      </main>
+
+      <footer>
+        <span>Decode mapping · no pipeline parallelism</span>
+        <span>BF16 · 32 channels/device · SA 4×16</span>
+      </footer>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="app.js"></script>
+  </body>
+</html>
