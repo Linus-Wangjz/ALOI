@@ -823,7 +823,7 @@ main {
 }
 
 .physical-host {
-  min-height: 720px;
+  min-height: 820px;
 }
 
 .fact-grid {
@@ -962,6 +962,62 @@ footer {
   stroke-width: 0.85;
 }
 
+.matrix-grid-line.fine {
+  stroke: rgba(66, 83, 110, 0.2);
+  stroke-width: 0.55;
+}
+
+.tensor-depth-slice {
+  filter: drop-shadow(0 2px 2px rgba(37, 54, 78, 0.08));
+}
+
+.depth-owner-rail {
+  filter: drop-shadow(0 1px 2px rgba(37, 54, 78, 0.08));
+}
+
+.matrix-channel-slice,
+.matrix-channel-group-fill {
+  pointer-events: none;
+}
+
+.channel-group-outline {
+  pointer-events: all;
+  cursor: crosshair;
+}
+
+.channel-group-outline.is-highlighted,
+.physical-channel-group.is-highlighted {
+  filter: drop-shadow(0 0 4px rgba(32, 88, 214, 0.32));
+}
+
+.channel-group-outline.is-linked,
+.physical-channel-group.is-linked {
+  opacity: 1 !important;
+  stroke-width: 3.2 !important;
+  filter: drop-shadow(0 0 7px rgba(32, 88, 214, 0.55));
+}
+
+.matrix-channel-slice.is-linked,
+[data-vector-slice].is-linked {
+  opacity: 0.3 !important;
+}
+
+.physical-channel-group {
+  cursor: crosshair;
+}
+
+.channel-group-label,
+.matrix-view-label {
+  pointer-events: none;
+}
+
+.matrix-view-label {
+  fill: #41516a;
+  font-size: 8px;
+  font-weight: 780;
+  letter-spacing: 0.04em;
+}
+
 .axis-line {
   fill: none;
   stroke: #8a97aa;
@@ -1080,6 +1136,33 @@ footer {
   opacity: 0;
 }
 
+.vector-packet {
+  stroke: #173d93;
+  stroke-width: 1.2;
+  opacity: 0;
+  filter: drop-shadow(0 3px 4px rgba(31, 84, 205, 0.22));
+}
+
+.selected-vector-slice {
+  fill: rgba(255, 207, 137, 0.32);
+  stroke: #dc8524;
+  stroke-width: 1.6;
+  pointer-events: none;
+}
+
+.vector-to-gb-path {
+  fill: none;
+  stroke: #db9037;
+  stroke-width: 1.7;
+  stroke-dasharray: 6 6;
+  opacity: 0;
+}
+
+.vector-to-gb-path.is-active {
+  opacity: 0.9;
+  animation: dash-flow 760ms linear infinite;
+}
+
 .mapping-path {
   fill: none;
   stroke: #6f86b7;
@@ -1112,21 +1195,80 @@ footer {
   stroke-width: 1.2;
 }
 
+.gb-vector-slot {
+  fill: #fffaf3;
+  stroke: #d9ad76;
+  stroke-width: 0.8;
+}
+
+.gb-vector-slot.is-loading {
+  animation: gb-load-pulse 620ms ease-in-out infinite alternate;
+}
+
+.gb-vector-slot.is-loaded {
+  fill: #dce7ff;
+  stroke: #2058d6;
+}
+
+@keyframes gb-load-pulse {
+  to { fill: #ffe1b8; stroke: #dc8524; }
+}
+
 .sa-box {
   fill: #e8f6f3;
   stroke: #168b7f;
   stroke-width: 1.2;
 }
 
+.sa-cell {
+  fill: #f8fcfb;
+  stroke: #77b9b2;
+  stroke-width: 0.45;
+}
+
+.runtime-panel.is-streaming .sa-cell {
+  animation: sa-stream 900ms cubic-bezier(0.22, 0.61, 0.36, 1) var(--stream-delay) 2 both;
+}
+
+@keyframes sa-stream {
+  0% { fill: #f8fcfb; stroke: #77b9b2; }
+  28% { fill: #ffd38f; stroke: #dc8524; }
+  62% { fill: #5fc5b8; stroke: #087a70; }
+  100% { fill: #dff5f2; stroke: #168b7f; }
+}
+
+.runtime-arrow {
+  opacity: 0.65;
+}
+
+.runtime-panel.is-streaming .runtime-arrow {
+  opacity: 1;
+  stroke-dasharray: 5 4;
+  animation: dash-flow 500ms linear infinite;
+}
+
+.phase-button {
+  cursor: pointer;
+  outline: none;
+}
+
 .phase-pill {
   fill: #f5f7fa;
   stroke: #d2dbe7;
   stroke-width: 0.8;
+  transition: fill 160ms ease, stroke 160ms ease, stroke-width 160ms ease;
 }
 
-.phase-pill.is-active {
+.phase-button.is-active .phase-pill {
   fill: #eaf0ff;
   stroke: #6d8dd7;
+}
+
+.phase-button:hover .phase-pill,
+.phase-button:focus-visible .phase-pill {
+  fill: #fff6e8;
+  stroke: #dc8524;
+  stroke-width: 1.6;
 }
 
 .phase-text {
@@ -1135,8 +1277,19 @@ footer {
   font-weight: 670;
 }
 
-.phase-text.is-active {
+.phase-button.is-active .phase-text {
   fill: #1744a5;
+}
+
+.phase-note {
+  fill: #929db0;
+  font-size: 7.5px;
+  font-weight: 620;
+}
+
+.phase-button:hover .phase-note,
+.phase-button:focus-visible .phase-note {
+  fill: #a45e17;
 }
 
 @media (max-width: 1120px) {

@@ -212,7 +212,7 @@
         <section id="level2" class="level" aria-labelledby="level2-title" hidden>
           <div class="level-heading compact">
             <div>
-              <p class="step-label"><span>02</span> Global matrix → TP devices</p>
+              <p class="step-label"><span>02</span> Global tensor / matrix → TP devices</p>
               <h2 id="level2-title"></h2>
               <p id="level2-subtitle"></p>
             </div>
@@ -226,7 +226,7 @@
           <article id="partitionStage" class="visual-stage">
             <div class="stage-topline">
               <span id="partitionEquation" class="equation"></span>
-              <span class="schematic-label">Schematic · dimensions are labeled explicitly</span>
+              <span class="schematic-label">KV-aware 3D view · dimensions are labeled explicitly</span>
             </div>
             <div id="partitionViz" class="svg-host" aria-live="polite"></div>
           </article>
@@ -237,13 +237,13 @@
         <section id="level3" class="level" aria-labelledby="level3-title" hidden>
           <div class="level-heading compact">
             <div>
-              <p class="step-label"><span>03</span> Local matrix → bank rows</p>
+              <p class="step-label"><span>03</span> GEMV operand → channels, banks, GB &amp; SA</p>
               <h2 id="level3-title"></h2>
               <p id="level3-subtitle"></p>
             </div>
             <div class="stage-actions">
               <button id="replayMapping" class="action-button" type="button">
-                <span aria-hidden="true">↻</span> Reset tile mapping
+                <span aria-hidden="true">↻</span> Reset animation
               </button>
             </div>
           </div>

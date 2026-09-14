@@ -243,6 +243,39 @@
     return "[" + number(shape.k) + ", " + number(shape.n) + "]";
   }
 
+  function kvDepthSpec(kernel) {
+    if (kernel.short === "Wq") {
+      return { label: "KV GROUP", count: 8, planeK: 8192, planeN: 1024, noun: "KV groups" };
+    }
+    if (kernel.short === "[Wk | Wv]") {
+      return { label: "KV HEAD", count: 8, planeK: 8192, planeN: 256, noun: "KV heads" };
+    }
+    if (kernel.kind === "qk" || kernel.kind === "sv") {
+      return { label: "KV HEAD", count: 8, planeK: state.context, planeN: 128, noun: "KV heads" };
+    }
+    if (kernel.short === "Wo") {
+      return { label: "KV GROUP", count: 8, planeK: 1024, planeN: 8192, noun: "KV groups" };
+    }
+    return null;
+  }
+
+  function physicalMatrixShape(kernel) {
+    if (kernel.kind === "qk") return { k: 128, n: state.context };
+    if (kernel.kind === "sv") return { k: state.context, n: 128 };
+    return localShape(kernel);
+  }
+
+  function gemvEquation(kernel) {
+    var shape = physicalMatrixShape(kernel);
+    if (kernel.kind === "qk") {
+      return "q [1 × 128] × K_headᵀ [128 × " + contextLabel(state.context) + "] → score [1 × " + contextLabel(state.context) + "]";
+    }
+    if (kernel.kind === "sv") {
+      return "score [1 × " + contextLabel(state.context) + "] × V_head [" + contextLabel(state.context) + " × 128] → o [1 × 128]";
+    }
+    return "x [1 × " + number(shape.k) + "] × W_local [" + number(shape.k) + " × " + number(shape.n) + "] → y_local [1 × " + number(shape.n) + "]";
+  }
+
   function headRange(device, total) {
     var perDevice = total / state.tp;
     var first = device * perDevice;
@@ -445,20 +478,110 @@
     return { x: frame.x, y: frame.y + index * frame.h / tp, w: frame.w, h: frame.h / tp };
   }
 
+  function drawTensorDepth(svg, frame, depth) {
+    var dx = 44;
+    var dy = -34;
+    var top = [];
+    for (var head = depth.count - 1; head >= 0; head -= 1) {
+      var a0 = head / depth.count;
+      var a1 = (head + 1) / depth.count;
+      var owner = Math.min(state.tp - 1, Math.floor(head / (depth.count / state.tp)));
+      var headColor = DEVICE_COLORS[owner];
+      top.push(append(svg, "polygon", {
+        points: [
+          (frame.x + a0 * dx) + "," + (frame.y + a0 * dy),
+          (frame.x + frame.w + a0 * dx) + "," + (frame.y + a0 * dy),
+          (frame.x + frame.w + a1 * dx) + "," + (frame.y + a1 * dy),
+          (frame.x + a1 * dx) + "," + (frame.y + a1 * dy)
+        ].join(" "),
+        fill: headColor.fill,
+        stroke: headColor.strong,
+        "stroke-width": 0.9,
+        "class": "tensor-depth-slice",
+        "data-kv-head": head,
+        "data-owner": owner
+      }));
+    }
+    append(svg, "polygon", {
+      points: [
+        (frame.x + frame.w) + "," + frame.y,
+        (frame.x + frame.w + dx) + "," + (frame.y + dy),
+        (frame.x + frame.w + dx) + "," + (frame.y + frame.h + dy),
+        (frame.x + frame.w) + "," + (frame.y + frame.h)
+      ].join(" "),
+      fill: "#edf2f8",
+      stroke: "#9eacbf",
+      "stroke-width": 1
+    });
+
+    append(svg, "path", {
+      d: "M " + (frame.x + 2) + " " + (frame.y - 13) + " L " + (frame.x + dx - 1) + " " + (frame.y + dy - 13),
+      stroke: "#66758a",
+      "stroke-width": 1.2,
+      "marker-end": "url(#arrowhead)"
+    });
+    append(svg, "text", {
+      x: frame.x + dx / 2 + 4,
+      y: frame.y + dy / 2 - 18,
+      "class": "svg-kicker",
+      "text-anchor": "middle",
+      transform: "rotate(-38 " + (frame.x + dx / 2 + 4) + " " + (frame.y + dy / 2 - 18) + ")"
+    }, depth.label + " · 8");
+
+    var railX = frame.x + frame.w + dx + 15;
+    var railY = frame.y + 3;
+    var railH = frame.h - 6;
+    var sources = [];
+    for (var device = 0; device < state.tp; device += 1) {
+      var rail = {
+        x: railX,
+        y: railY + device * railH / state.tp,
+        w: 24,
+        h: railH / state.tp
+      };
+      sources.push(rail);
+      append(svg, "rect", {
+        x: rail.x,
+        y: rail.y,
+        width: rail.w,
+        height: rail.h,
+        rx: 2,
+        fill: DEVICE_COLORS[device].fill,
+        stroke: DEVICE_COLORS[device].strong,
+        "class": "depth-owner-rail"
+      });
+      append(svg, "text", {
+        x: rail.x + rail.w / 2,
+        y: rail.y + rail.h / 2 + 3,
+        fill: DEVICE_COLORS[device].text,
+        "font-size": rail.h < 22 ? 6.5 : 8,
+        "font-weight": 780,
+        "text-anchor": "middle"
+      }, "D" + device);
+    }
+    append(svg, "text", { x: railX + 12, y: railY + railH + 16, "class": "svg-small", "text-anchor": "middle" }, "TP owners");
+    return sources;
+  }
+
   function renderMatrixPartition(kernel) {
     var host = document.getElementById("partitionViz");
     host.setAttribute("aria-label", kernel.title + " global matrix partitioned across " + state.tp + " devices");
     var svg = svgRoot(host, "0 0 1200 560");
     addArrowDefs(svg);
     var shape = globalShape(kernel);
+    var depth = kvDepthSpec(kernel);
     var local = localShape(kernel);
-    var frame = fitRect(shape.k, shape.n, { x: 55, y: 118, w: 410, h: 270, minW: 145, minH: 92 });
+    var visibleShape = depth ? { k: depth.planeK, n: depth.planeN } : shape;
+    var frame = fitRect(visibleShape.k, visibleShape.n, { x: 55, y: 138, w: depth ? 330 : 410, h: 245, minW: depth ? 205 : 145, minH: 92 });
     var positions = devicePositions(state.tp);
 
-    append(svg, "text", { x: 55, y: 48, "class": "svg-kicker" }, "GLOBAL LOGICAL MATRIX");
+    append(svg, "text", { x: 55, y: 48, "class": "svg-kicker" }, depth ? "GLOBAL LOGICAL 3D TENSOR" : "GLOBAL LOGICAL MATRIX");
     append(svg, "text", { x: 55, y: 72, "class": "svg-title" }, kernel.globalLabel);
     append(svg, "text", { x: 55, y: 89, "class": "svg-subtitle" },
-      kernel.split === "column" ? "Column parallel · split output N" : "Row parallel · split reduction K");
+      depth ? "Logical reshape [" + depth.count + " " + depth.noun + ", " + number(depth.planeK) + ", " + number(depth.planeN) + "] · split the depth axis" :
+        kernel.split === "column" ? "Column parallel · split output N" : "Row parallel · split reduction K");
+
+    var depthSources = depth ? drawTensorDepth(svg, frame, depth) : null;
 
     append(svg, "rect", {
       x: frame.x,
@@ -468,24 +591,41 @@
       rx: 7,
       "class": "matrix-frame"
     });
+    if (depth) {
+      for (var planeLine = 1; planeLine < 4; planeLine += 1) {
+        append(svg, "line", {
+          x1: frame.x + frame.w * planeLine / 4,
+          y1: frame.y,
+          x2: frame.x + frame.w * planeLine / 4,
+          y2: frame.y + frame.h,
+          "class": "matrix-grid-line"
+        });
+      }
+      append(svg, "text", {
+        x: frame.x + frame.w / 2,
+        y: frame.y + frame.h / 2 + 4,
+        "class": "svg-mono",
+        "text-anchor": "middle"
+      }, "one " + (depth.label === "KV HEAD" ? "KV-head" : "KV-group") + " plane");
+    }
 
     append(svg, "text", {
       x: frame.x + frame.w / 2,
       y: frame.y + frame.h + 27,
       "class": "svg-small",
       "text-anchor": "middle"
-    }, kernel.outputAxis);
+    }, depth ? "per-plane N = " + number(depth.planeN) : kernel.outputAxis);
     append(svg, "text", {
       x: frame.x - 23,
       y: frame.y + frame.h / 2,
       "class": "svg-small",
       "text-anchor": "middle",
       transform: "rotate(-90 " + (frame.x - 23) + " " + (frame.y + frame.h / 2) + ")"
-    }, kernel.inputAxis);
+    }, depth ? "per-plane K = " + number(depth.planeK) : kernel.inputAxis);
 
     for (var i = 0; i < state.tp; i += 1) {
       var color = DEVICE_COLORS[i];
-      var source = sourcePiece(frame, i, kernel.split === "column" ? "column" : "row", state.tp);
+      var source = depth ? depthSources[i] : sourcePiece(frame, i, kernel.split === "column" ? "column" : "row", state.tp);
       append(svg, "rect", {
         x: source.x,
         y: source.y,
@@ -719,10 +859,11 @@
     } else {
       var shape = globalShape(kernel);
       var local = localShape(kernel);
-      var splitText = kernel.split === "column" ? "Output N / columns" : kernel.split === "row" ? "Reduction K / rows" : "KV-head groups";
+      var depth = kvDepthSpec(kernel);
+      var splitText = depth ? depth.label + " / depth" : kernel.split === "column" ? "Output N / columns" : kernel.split === "row" ? "Reduction K / rows" : "KV-head groups";
       facts = [
-        ["Global operand", "[" + number(shape.k) + ", " + number(shape.n) + "]", kernel.globalLabel],
-        ["TP partition axis", splitText, kernel.split === "column" ? "Vertical matrix slices" : "Horizontal matrix slices"],
+        ["Global operand", depth ? "[8, " + number(depth.planeK) + ", " + number(depth.planeN) + "]" : "[" + number(shape.k) + ", " + number(shape.n) + "]", depth ? "Logical KV-aware reshape of " + kernel.globalLabel : kernel.globalLabel],
+        ["TP partition axis", splitText, depth ? "Each device owns " + (8 / state.tp) + " contiguous " + depth.noun + "." : kernel.split === "column" ? "Vertical matrix slices" : "Horizontal matrix slices"],
         ["Per-device operand", localShapeLabel(kernel), kernel.localOutput(state)],
         [kernel.split === "row" ? "Cross-device result" : "Next step", kernel.split === "row" ? "TP All-Reduce" : "Device-local", kernel.communication, kernel.split === "row" ? "collective" : "local"]
       ];
@@ -766,6 +907,10 @@
         result.reductionSlice = Math.ceil(local.k / result.reductionGroups);
         result.activeChannels = result.channelsPerGroup * result.reductionGroups;
       }
+      result.representativeChannels = [];
+      for (var denseChannel = 0; denseChannel < Math.min(result.channelsPerGroup, result.activeChannels); denseChannel += 1) {
+        result.representativeChannels.push(denseChannel);
+      }
       return result;
     }
 
@@ -777,7 +922,8 @@
       result.contextsPerBank = Math.ceil(state.context / result.banksPerHead);
       result.sequenceWaves = Math.ceil(result.contextsPerBank / 16);
       result.queryWaves = 2;
-      result.representativeChannels = [0];
+      result.representativeChannels = [];
+      for (var qkChannel = 0; qkChannel < result.channelsPerHead; qkChannel += 1) result.representativeChannels.push(qkChannel);
       return result;
     }
 
@@ -804,9 +950,9 @@
     if (!kernel || kernel.kind === "local") return;
     var layout = physicalLayout(kernel);
     document.getElementById("level3-title").textContent = kernel.short + " · Device " + state.device;
-    document.getElementById("level3-subtitle").textContent = "Inspect how the TP-local operand is tiled over " + dramLabel(state.dram) + " channels, banks and rows.";
-    document.getElementById("physicalEquation").textContent = "Device " + state.device + " local operand " + localShapeLabel(kernel);
-    document.getElementById("physicalHint").textContent = "Click the highlighted tile";
+    document.getElementById("level3-subtitle").textContent = "Follow one GEMV from the transposed TP-local tensor through " + dramLabel(state.dram) + " channel groups, bank rows, GB and SA4×16.";
+    document.getElementById("physicalEquation").textContent = gemvEquation(kernel);
+    document.getElementById("physicalHint").textContent = "Click the tile or one of the four phases";
     renderPhysicalSvg(kernel, layout);
     renderPhysicalFacts(kernel, layout);
   }
@@ -814,34 +960,39 @@
   function renderPhysicalSvg(kernel, layout) {
     var host = document.getElementById("physicalViz");
     host.setAttribute("aria-label", kernel.title + " physical mapping inside Device " + state.device);
-    var svg = svgRoot(host, "0 0 1280 720");
+    var svg = svgRoot(host, "0 0 1360 820");
     addArrowDefs(svg);
     var color = DEVICE_COLORS[state.device];
-    var local = localShape(kernel);
-    var frame = fitRect(local.k, local.n, { x: 65, y: 165, w: 390, h: 285, minW: 155, minH: 100 });
+    var matrixShape = physicalMatrixShape(kernel);
+    /* The screen uses the GEMV point of view: K runs left-to-right and N top-to-bottom. */
+    var frame = fitRect(matrixShape.n, matrixShape.k, { x: 70, y: 220, w: 445, h: 270, minW: 180, minH: 108 });
 
     append(svg, "text", { x: 54, y: 49, "class": "svg-kicker" }, "TP-LOCAL OPERAND");
     append(svg, "text", { x: 54, y: 75, "class": "svg-title" }, "Device " + state.device + " · " + localShapeLabel(kernel));
     append(svg, "text", { x: 54, y: 94, "class": "svg-subtitle" }, physicalOperandSubtitle(kernel, layout));
 
+    append(svg, "text", { x: 54, y: 126, "class": "svg-kicker" }, "GEMV RUNTIME VECTOR");
+    append(svg, "text", { x: 54, y: 143, "class": "svg-subtitle" }, "Horizontal x[K]; highlighted K-slice is staged in the Global Buffer");
+
     append(svg, "rect", { x: frame.x, y: frame.y, width: frame.w, height: frame.h, rx: 8, "class": "matrix-frame" });
     drawLocalMatrixGrid(svg, frame, kernel, layout, color);
 
-    append(svg, "text", { x: frame.x + frame.w / 2, y: frame.y + frame.h + 27, "class": "svg-small", "text-anchor": "middle" }, kernel.outputAxis || "output dimension");
+    append(svg, "text", { x: frame.x + frame.w / 2, y: frame.y + frame.h + 27, "class": "svg-small", "text-anchor": "middle" }, "K · " + number(matrixShape.k) + " (reduction / vector axis)");
     append(svg, "text", {
       x: frame.x - 23,
       y: frame.y + frame.h / 2,
       "class": "svg-small",
       "text-anchor": "middle",
       transform: "rotate(-90 " + (frame.x - 23) + " " + (frame.y + frame.h / 2) + ")"
-    }, kernel.inputAxis || "reduction dimension");
+    }, "N · " + number(matrixShape.n) + " (output axis)");
+    append(svg, "text", { x: frame.x + 10, y: frame.y + 17, "class": "matrix-view-label" }, "display transpose · rows N, columns K");
 
     var selected = selectedTile(frame, kernel, layout);
     var tileGroup = append(svg, "g", {
       "class": "matrix-tile-clickable",
       role: "button",
       tabindex: "0",
-      "aria-label": "Map selected tile to DRAM banks"
+      "aria-label": "Map selected matrix tile to DRAM banks"
     });
     append(tileGroup, "rect", {
       x: selected.x,
@@ -851,15 +1002,18 @@
       rx: 4,
       "class": "selected-tile"
     });
-    textLines(tileGroup, selected.x + selected.w / 2, selected.y + selected.h / 2 - 4, selected.lines, "svg-mono", 13, "middle");
+    var compactTile = selected.w < 88 || selected.h < 62;
+    var tileLabelX = compactTile ? selected.x + selected.w + 8 : selected.x + selected.w / 2;
+    var tileLabelY = compactTile ? selected.y + Math.min(14, selected.h / 2) : selected.y + selected.h / 2 - 4;
+    textLines(tileGroup, tileLabelX, tileLabelY, selected.lines, "svg-mono", 13, compactTile ? "start" : "middle");
     append(tileGroup, "text", {
-      x: selected.x + selected.w / 2,
-      y: selected.y + selected.h / 2 + 27,
+      x: compactTile ? tileLabelX : selected.x + selected.w / 2,
+      y: compactTile ? tileLabelY + 29 : selected.y + selected.h / 2 + 27,
       fill: "#1744a5",
       "font-size": 8,
       "font-weight": 760,
-      "text-anchor": "middle"
-    }, "CLICK TO MAP");
+      "text-anchor": compactTile ? "start" : "middle"
+    }, "CLICK · PLAY 1→4");
     tileGroup.addEventListener("click", revealPhysicalMapping);
     tileGroup.addEventListener("keydown", function (event) {
       if (event.key === "Enter" || event.key === " ") revealPhysicalMapping();
@@ -867,55 +1021,206 @@
 
     append(svg, "path", {
       d: "M " + (selected.x + selected.w) + " " + (selected.y + selected.h / 2) +
-        " C 500 " + (selected.y + selected.h / 2) + ", 520 245, 625 245",
+        " C 535 " + (selected.y + selected.h / 2) + ", 555 245, 650 245",
       "class": "mapping-path",
       id: "mappingPath"
     });
 
     var bankPanel = append(svg, "g", { id: "bankPanel", "class": "bank-panel-svg" });
-    append(bankPanel, "rect", { x: 575, y: 38, width: 655, height: 520, rx: 16, fill: "#fbfcfe", stroke: "#cdd6e3" });
-    append(bankPanel, "text", { x: 600, y: 68, "class": "svg-kicker" }, "PHYSICAL DEVICE");
-    append(bankPanel, "text", { x: 600, y: 91, "class": "svg-title" }, dramLabel(state.dram) + " · 32 channels × " + layout.banksPerChannel + " banks");
-    append(bankPanel, "text", { x: 600, y: 108, "class": "svg-subtitle" }, bankPanelSubtitle(kernel, layout));
+    append(bankPanel, "rect", { x: 590, y: 35, width: 720, height: 650, rx: 16, fill: "#fbfcfe", stroke: "#cdd6e3" });
+    append(bankPanel, "text", { x: 615, y: 65, "class": "svg-kicker" }, "PHYSICAL DEVICE");
+    append(bankPanel, "text", { x: 615, y: 88, "class": "svg-title" }, dramLabel(state.dram) + " · 32 channels × " + layout.banksPerChannel + " banks");
+    append(bankPanel, "text", { x: 615, y: 105, "class": "svg-subtitle" }, bankPanelSubtitle(kernel, layout));
 
     var bankGeometry = drawBankGrid(bankPanel, kernel, layout, color);
-    drawRuntimePanel(bankPanel, kernel, layout);
-    drawPackets(svg, selected, bankGeometry, layout);
+    var runtimeGeometry = drawRuntimePanel(bankPanel, kernel, layout);
+    drawGemvVector(svg, frame, kernel, layout, color, runtimeGeometry.gb);
+    drawPackets(svg, selected, bankGeometry, layout, kernel, color);
     drawExecutionPhases(svg);
+    wireChannelGroupHighlight(svg);
 
-    append(svg, "text", { x: 54, y: 535, "class": "svg-kicker" }, "SELECTED TILE RULE");
-    textLines(svg, 54, 559, selectedRuleLines(kernel, layout), "svg-subtitle", 17);
+    append(svg, "text", { x: 54, y: 565, "class": "svg-kicker" }, "SELECTED TILE RULE");
+    textLines(svg, 54, 589, selectedRuleLines(kernel, layout), "svg-subtitle", 17);
+    append(svg, "text", { x: 54, y: 720, "class": "svg-kicker" }, "INTERACTIVE PIPELINE · CLICK ANY STAGE TO REPLAY IT");
 
     svg.setAttribute("data-bank-count", layout.banksPerChannel);
+    setPhase(1);
   }
 
   function physicalOperandSubtitle(kernel, layout) {
     if (kernel.kind === "qk") {
-      return layout.localKvHeads + " local KV head(s) · complete " + contextLabel(state.context) + " context per head";
+      return layout.localKvHeads + " local KV head(s) · representative head shown · complete " + contextLabel(state.context) + " context";
     }
     if (kernel.kind === "sv") {
-      return layout.localKvHeads + " local KV head(s) · dual-half V-cache packing";
+      return layout.localKvHeads + " local KV head(s) · representative head shown · dual-half V-cache packing";
     }
     return kernel.split === "column" ? "TP-local output-column shard" : "TP-local reduction-row shard";
   }
 
   function drawLocalMatrixGrid(svg, frame, kernel, layout, color) {
-    var rows;
-    var columns;
-    if (kernel.kind === "dense") {
-      rows = Math.min(layout.reductionGroups, 32);
-      columns = Math.min(8, Math.max(2, Math.ceil(layout.localN / Math.max(layout.outputCapacity, 1) * 4)));
-    } else {
-      rows = Math.min(layout.localKvHeads || 1, 8);
-      columns = kernel.kind === "qk" ? 8 : 4;
+    var groupCount = kernel.kind === "sv" ? Math.min(layout.contextGroups, 32) : kernel.kind === "qk" ? 1 : Math.min(layout.reductionGroups, 32);
+    var channelsInGroup = kernel.kind === "qk" ? layout.channelsPerHead : kernel.kind === "sv" ? layout.physicalGroupChannels : layout.channelsPerGroup;
+    var groupWidth = frame.w / Math.max(groupCount, 1);
+
+    for (var group = 0; group < groupCount; group += 1) {
+      var channelStart = kernel.kind === "qk" ? 0 : kernel.kind === "sv" ? group * layout.physicalGroupChannels : group * layout.channelsPerGroup;
+      channelStart = channelStart % 32;
+      var groupColor = channelColor(kernel, layout, channelStart, color);
+      var gx = frame.x + group * groupWidth;
+      append(svg, "rect", {
+        x: gx,
+        y: frame.y,
+        width: groupWidth,
+        height: frame.h,
+        fill: groupColor.fill,
+        opacity: group === 0 ? 0.68 : 0.42,
+        "class": "matrix-channel-group-fill"
+      });
+
+      var visibleChannels = Math.max(1, Math.min(channelsInGroup, 32));
+      for (var slice = 0; slice < visibleChannels; slice += 1) {
+        var sy = frame.y + slice * frame.h / visibleChannels;
+        append(svg, "rect", {
+          x: gx,
+          y: sy,
+          width: groupWidth,
+          height: frame.h / visibleChannels,
+          fill: groupColor.strong,
+          opacity: 0.045 + (slice % 3) * 0.035,
+          "class": "matrix-channel-slice",
+          "data-channel-slice": (channelStart + slice) % 32,
+          "data-channel-group": group
+        });
+        if (slice > 0) {
+          append(svg, "line", { x1: gx, y1: sy, x2: gx + groupWidth, y2: sy, "class": "matrix-grid-line fine" });
+        }
+        if (group === 0 && groupWidth >= 40 && frame.h / visibleChannels >= 7) {
+          append(svg, "text", {
+            x: gx + 4,
+            y: sy + Math.min(frame.h / visibleChannels - 1.5, 7),
+            fill: groupColor.text,
+            "font-size": 5.8,
+            "font-weight": 720,
+            "data-channel-label": (channelStart + slice) % 32
+          }, "C" + ((channelStart + slice) % 32));
+        }
+      }
+
+      append(svg, "rect", {
+        x: gx,
+        y: frame.y,
+        width: groupWidth,
+        height: frame.h,
+        rx: groupCount === 1 ? 8 : 1,
+        fill: "none",
+        stroke: groupColor.strong,
+        "stroke-width": group === 0 ? 2.8 : 1.5,
+        "class": "channel-group-outline" + (group === 0 ? " is-highlighted" : ""),
+        "data-channel-group-outline": group
+      });
+
+      if (groupWidth >= 42 || group === 0 || group === groupCount - 1) {
+        var lastChannel = (channelStart + channelsInGroup - 1) % 32;
+        append(svg, "text", {
+          x: gx + groupWidth / 2,
+          y: frame.y + frame.h - 8,
+          fill: groupColor.text,
+          "font-size": groupWidth < 42 ? 6.5 : 8,
+          "font-weight": 790,
+          "text-anchor": "middle",
+          "class": "channel-group-label"
+        }, "G" + group + " · C" + channelStart + (channelsInGroup > 1 ? "–C" + lastChannel : ""));
+      }
     }
-    for (var r = 1; r < rows; r += 1) {
-      append(svg, "line", { x1: frame.x, y1: frame.y + frame.h * r / rows, x2: frame.x + frame.w, y2: frame.y + frame.h * r / rows, "class": "matrix-grid-line" });
+
+    append(svg, "rect", { x: frame.x, y: frame.y, width: frame.w, height: frame.h, rx: 8, fill: "none", stroke: color.strong, "stroke-width": 1.7 });
+    append(svg, "line", { x1: frame.x, y1: frame.y - 15, x2: frame.x + 22, y2: frame.y - 15, stroke: color.strong, "stroke-width": 3 });
+    append(svg, "text", { x: frame.x + 28, y: frame.y - 12, "class": "svg-small" }, "same colored outline = one channel group");
+  }
+
+  function vectorGroupCount(kernel, layout) {
+    if (kernel.kind === "qk") return 1;
+    if (kernel.kind === "sv") return Math.min(layout.contextGroups, 32);
+    return Math.min(layout.reductionGroups, 32);
+  }
+
+  function drawGemvVector(svg, frame, kernel, layout, color, gbTarget) {
+    var y = 166;
+    var h = 22;
+    var groups = Math.max(1, vectorGroupCount(kernel, layout));
+    var segmentW = frame.w / groups;
+    append(svg, "text", { x: frame.x - 9, y: y + 15, "class": "svg-mono", "text-anchor": "end" }, "x");
+    for (var group = 0; group < groups; group += 1) {
+      var channel = kernel.kind === "sv" ? group * layout.physicalGroupChannels : kernel.kind === "qk" ? 0 : group * layout.channelsPerGroup;
+      channel %= 32;
+      var segmentColor = channelColor(kernel, layout, channel, color);
+      append(svg, "rect", {
+        x: frame.x + group * segmentW,
+        y: y,
+        width: segmentW,
+        height: h,
+        rx: groups === 1 ? 4 : 1,
+        fill: segmentColor.fill,
+        stroke: segmentColor.strong,
+        "stroke-width": group === 0 ? 2 : 0.8,
+        "data-vector-slice": group,
+        "data-channel-group": group
+      });
+      if ((segmentW > 34 || group === 0 || group === groups - 1) && groups > 1) {
+        append(svg, "text", {
+          x: frame.x + (group + 0.5) * segmentW,
+          y: y + 15,
+          fill: segmentColor.text,
+          "font-size": segmentW < 34 ? 6.5 : 8,
+          "font-weight": 760,
+          "text-anchor": "middle"
+        }, "K" + group);
+      }
     }
-    for (var c = 1; c < columns; c += 1) {
-      append(svg, "line", { x1: frame.x + frame.w * c / columns, y1: frame.y, x2: frame.x + frame.w * c / columns, y2: frame.y + frame.h, "class": "matrix-grid-line" });
-    }
-    append(svg, "rect", { x: frame.x, y: frame.y, width: frame.w, height: frame.h, rx: 8, fill: "none", stroke: color.strong, "stroke-width": 1.5 });
+    append(svg, "text", { x: frame.x + frame.w + 9, y: y + 15, "class": "svg-mono" }, "[1 × " + number(physicalMatrixShape(kernel).k) + "]");
+    append(svg, "path", {
+      d: "M " + (frame.x + frame.w / 2) + " " + (y + h + 3) + " V " + (frame.y - 6),
+      stroke: "#91a0b5",
+      "stroke-width": 1.2,
+      "marker-end": "url(#arrowhead)"
+    });
+
+    var groupK = kernel.kind === "qk" ? 128 : kernel.kind === "sv" ? layout.contextsPerHalf : layout.reductionSlice;
+    var chunkK = kernel.kind === "qk" ? 128 : kernel.kind === "sv" ? Math.min(128, groupK) : Math.min(256, groupK);
+    var selectedW = kernel.kind === "qk" ? frame.w : Math.max(5, segmentW * chunkK / Math.max(groupK, 1));
+    append(svg, "rect", {
+      x: frame.x,
+      y: y - 2,
+      width: selectedW,
+      height: h + 4,
+      rx: 3,
+      "class": "selected-vector-slice",
+      "data-selected-vector-k": chunkK
+    });
+    append(svg, "text", { x: frame.x, y: y - 7, fill: "#b66a1d", "font-size": 7.5, "font-weight": 790 }, "GB slice · " + number(chunkK) + " K elements");
+    var vectorPacket = append(svg, "rect", {
+      x: frame.x,
+      y: y,
+      width: selectedW,
+      height: h,
+      rx: 3,
+      "class": "vector-packet",
+      "data-vector-packet": "true",
+      "data-sx": frame.x,
+      "data-sy": y,
+      "data-sw": selectedW,
+      "data-sh": h,
+      "data-tx": gbTarget.x + 12,
+      "data-ty": gbTarget.y + gbTarget.h / 2 - 5,
+      "data-tw": Math.max(25, gbTarget.w - 24),
+      "data-th": 10
+    });
+    vectorPacket.style.fill = color.strong;
+    append(svg, "path", {
+      d: "M " + (frame.x + selectedW / 2) + " " + (y - 4) + " C 520 120, 570 575, " + (gbTarget.x - 8) + " " + (gbTarget.y + gbTarget.h / 2),
+      "class": "vector-to-gb-path",
+      id: "vectorToGbPath"
+    });
   }
 
   function selectedTile(frame, kernel, layout) {
@@ -930,10 +1235,10 @@
     }
     if (kernel.kind === "sv") {
       return {
-        x: frame.x + frame.w * 0.08,
+        x: frame.x + frame.w * 0.02,
         y: frame.y + frame.h * 0.06,
-        w: frame.w * 0.84,
-        h: Math.max(60, frame.h * 0.24),
+        w: Math.max(8, frame.w / Math.max(layout.contextGroups, 1)),
+        h: frame.h * 0.88,
         lines: ["one context group", number(layout.contextsPerHalf) + " × 128"]
       };
     }
@@ -942,8 +1247,8 @@
     return {
       x: frame.x,
       y: frame.y,
-      w: Math.max(78, frame.w * tileFraction),
-      h: Math.max(62, frame.h * groupFraction),
+      w: Math.max(8, frame.w * groupFraction),
+      h: Math.max(8, frame.h * tileFraction),
       lines: [
         "matrix tile",
         number(layout.reductionSlice) + " × " + number(Math.min(layout.localN, layout.outputCapacity))
@@ -984,15 +1289,15 @@
   }
 
   function drawBankGrid(parent, kernel, layout, deviceColor) {
-    var x = 655;
-    var y = 144;
-    var width = 535;
-    var rowHeight = 11.4;
+    var x = 685;
+    var y = 140;
+    var width = 580;
+    var rowHeight = 10.8;
     var gap = 2;
     var cellW = (width - gap * (layout.banksPerChannel - 1)) / layout.banksPerChannel;
     var targets = [];
 
-    append(parent, "text", { x: 600, y: y - 13, "class": "svg-small" }, "CHANNEL");
+    append(parent, "text", { x: 615, y: y - 13, "class": "svg-small" }, "CHANNEL / GROUP");
     for (var headerBank = 0; headerBank < layout.banksPerChannel; headerBank += 1) {
       if (headerBank < 2 || headerBank === layout.banksPerChannel - 1) {
         append(parent, "text", {
@@ -1010,8 +1315,8 @@
     for (var channel = 0; channel < 32; channel += 1) {
       var cy = y + channel * rowHeight;
       var groupColor = channelColor(kernel, layout, channel, deviceColor);
-      append(parent, "text", { x: 627, y: cy + 7.5, "class": "svg-small", "text-anchor": "end" }, "C" + channel);
-      append(parent, "rect", { x: 635, y: cy, width: 8, height: 8.6, rx: 2, fill: groupColor.strong, opacity: activeBank(kernel, layout, channel) ? 0.82 : 0.16 });
+      append(parent, "text", { x: 650, y: cy + 7.5, "class": "svg-small", "text-anchor": "end" }, "C" + channel);
+      append(parent, "rect", { x: 657, y: cy, width: 8, height: 8.6, rx: 2, fill: groupColor.strong, opacity: activeBank(kernel, layout, channel) ? 0.82 : 0.16 });
       append(parent, "rect", { x: x - 4, y: cy - 1, width: width + 8, height: 10.5, rx: 2, "class": "channel-strip" });
       for (var bank = 0; bank < layout.banksPerChannel; bank += 1) {
         var bx = x + bank * (cellW + gap);
@@ -1030,23 +1335,102 @@
         }
       }
     }
+
+    var channelGroups;
+    var groupSize;
+    if (kernel.kind === "qk") {
+      channelGroups = layout.localKvHeads;
+      groupSize = layout.channelsPerHead;
+    } else if (kernel.kind === "sv") {
+      channelGroups = Math.floor(32 / layout.physicalGroupChannels);
+      groupSize = layout.physicalGroupChannels;
+    } else {
+      channelGroups = layout.reductionGroups;
+      groupSize = layout.channelsPerGroup;
+    }
+    channelGroups = Math.max(1, Math.min(channelGroups, Math.ceil(32 / Math.max(groupSize, 1))));
+    for (var group = 0; group < channelGroups; group += 1) {
+      var firstChannel = group * groupSize;
+      if (firstChannel >= 32) break;
+      var groupColor = channelColor(kernel, layout, firstChannel, deviceColor);
+      var groupHeight = Math.min(groupSize, 32 - firstChannel) * rowHeight;
+      append(parent, "rect", {
+        x: 672,
+        y: y + firstChannel * rowHeight - 2,
+        width: width + 17,
+        height: groupHeight + 1,
+        rx: 4,
+        fill: "none",
+        stroke: groupColor.strong,
+        "stroke-width": group === 0 ? 2 : 0.9,
+        opacity: group === 0 ? 0.9 : 0.48,
+        "class": "physical-channel-group" + (group === 0 ? " is-highlighted" : ""),
+        "data-physical-group": group
+      });
+      if (groupHeight >= 20 || group === 0) {
+        append(parent, "text", {
+          x: 675,
+          y: y + firstChannel * rowHeight + Math.min(12, groupHeight / 2 + 3),
+          fill: groupColor.text,
+          "font-size": 7,
+          "font-weight": 800,
+          "text-anchor": "end"
+        }, "G" + group);
+      }
+    }
     return { targets: targets, x: x, y: y, width: width, cellW: cellW, rowHeight: rowHeight };
   }
 
   function drawRuntimePanel(parent, kernel, layout) {
     var runtime = append(parent, "g", { id: "runtimePanel", "class": "runtime-panel" });
-    append(runtime, "line", { x1: 690, y1: 527, x2: 1160, y2: 527, stroke: "#d5dde8" });
-    append(runtime, "text", { x: 600, y: 548, "class": "svg-kicker" }, "RUNTIME DATAFLOW");
-    append(runtime, "rect", { x: 690, y: 474, width: 155, height: 48, rx: 9, "class": "gb-box" });
-    append(runtime, "text", { x: 768, y: 495, fill: "#7d4b14", "font-size": 11, "font-weight": 760, "text-anchor": "middle" }, "GB · runtime operand");
-    append(runtime, "text", { x: 768, y: 510, fill: "#a46928", "font-size": 8, "text-anchor": "middle" }, runtimeOperand(kernel));
-    append(runtime, "path", { d: "M 845 498 H 925", stroke: "#8d9caf", "stroke-width": 1.4, "marker-end": "url(#arrowhead)" });
-    append(runtime, "rect", { x: 930, y: 474, width: 105, height: 48, rx: 9, "class": "sa-box" });
-    append(runtime, "text", { x: 982, y: 496, fill: "#08675f", "font-size": 12, "font-weight": 780, "text-anchor": "middle" }, "SA 4×16");
-    append(runtime, "text", { x: 982, y: 511, fill: "#328f86", "font-size": 8, "text-anchor": "middle" }, "MAC_ABK");
-    append(runtime, "path", { d: "M 1035 498 H 1101", stroke: "#8d9caf", "stroke-width": 1.4, "marker-end": "url(#arrowhead)" });
-    append(runtime, "rect", { x: 1107, y: 480, width: 95, height: 36, rx: 18, fill: kernel.split === "row" ? "#efeafe" : "#e6f5f1", stroke: kernel.split === "row" ? "#8e77d5" : "#2b9b68" });
-    append(runtime, "text", { x: 1154, y: 502, fill: kernel.split === "row" ? "#5a43ad" : "#14704c", "font-size": 8.5, "font-weight": 760, "text-anchor": "middle" }, resultReduction(kernel));
+    var gb = { x: 650, y: 548, w: 180, h: 72 };
+    var sa = { x: 935, y: 548, w: 148, h: 72 };
+    append(runtime, "line", { x1: 615, y1: 508, x2: 1285, y2: 508, stroke: "#d5dde8" });
+    append(runtime, "text", { x: 615, y: 531, "class": "svg-kicker" }, "RUNTIME DATAFLOW · WEIGHT ROWS ↓  /  VECTOR SLICE →");
+
+    append(runtime, "rect", { x: gb.x, y: gb.y, width: gb.w, height: gb.h, rx: 10, "class": "gb-box" });
+    append(runtime, "text", { x: gb.x + gb.w / 2, y: gb.y + 18, fill: "#7d4b14", "font-size": 10, "font-weight": 780, "text-anchor": "middle" }, "GLOBAL BUFFER (GB)");
+    append(runtime, "text", { x: gb.x + gb.w / 2, y: gb.y + 33, fill: "#a46928", "font-size": 8, "text-anchor": "middle" }, runtimeOperand(kernel));
+    append(runtime, "rect", { x: gb.x + 12, y: gb.y + 43, width: gb.w - 24, height: 12, rx: 3, "class": "gb-vector-slot", "data-gb-slot": "true" });
+    append(runtime, "text", { x: gb.x + gb.w / 2, y: gb.y + 66, fill: "#9a6427", "font-size": 7.5, "text-anchor": "middle" }, gbCapacityLabel(kernel));
+
+    append(runtime, "path", { d: "M " + (gb.x + gb.w) + " " + (gb.y + gb.h / 2) + " H " + (sa.x - 10), stroke: "#8d9caf", "stroke-width": 1.5, "marker-end": "url(#arrowhead)", "class": "runtime-arrow" });
+    append(runtime, "path", { d: "M 1115 490 C 1115 525, 1035 523, 1035 " + (sa.y - 8), stroke: "#8d9caf", "stroke-width": 1.5, fill: "none", "marker-end": "url(#arrowhead)", "class": "runtime-arrow" });
+    append(runtime, "text", { x: 1120, y: 523, fill: "#748196", "font-size": 7.5 }, "bank-row stream");
+
+    append(runtime, "rect", { x: sa.x, y: sa.y, width: sa.w, height: sa.h, rx: 10, "class": "sa-box" });
+    append(runtime, "text", { x: sa.x + 11, y: sa.y + 17, fill: "#08675f", "font-size": 10, "font-weight": 790 }, "SA 4×16");
+    append(runtime, "text", { x: sa.x + sa.w - 10, y: sa.y + 17, fill: "#328f86", "font-size": 7.5, "text-anchor": "end" }, "MAC_ABK stream");
+    var cellStartX = sa.x + 11;
+    var cellStartY = sa.y + 27;
+    var cellGap = 1.2;
+    var cellW = (sa.w - 22 - cellGap * 15) / 16;
+    var cellH = 7;
+    for (var row = 0; row < 4; row += 1) {
+      for (var column = 0; column < 16; column += 1) {
+        append(runtime, "rect", {
+          x: cellStartX + column * (cellW + cellGap),
+          y: cellStartY + row * (cellH + cellGap),
+          width: cellW,
+          height: cellH,
+          rx: 1,
+          "class": "sa-cell",
+          "data-sa-cell": row + "-" + column,
+          style: "--stream-delay:" + (row * 34 + column * 23) + "ms"
+        });
+      }
+    }
+
+    append(runtime, "path", { d: "M " + (sa.x + sa.w) + " " + (sa.y + sa.h / 2) + " H 1154", stroke: "#8d9caf", "stroke-width": 1.5, "marker-end": "url(#arrowhead)" });
+    append(runtime, "rect", { x: 1160, y: 566, width: 115, height: 36, rx: 18, fill: kernel.split === "row" ? "#efeafe" : "#e6f5f1", stroke: kernel.split === "row" ? "#8e77d5" : "#2b9b68" });
+    append(runtime, "text", { x: 1217, y: 588, fill: kernel.split === "row" ? "#5a43ad" : "#14704c", "font-size": 8.5, "font-weight": 760, "text-anchor": "middle" }, resultReduction(kernel));
+    return { gb: gb, sa: sa };
+  }
+
+  function gbCapacityLabel(kernel) {
+    if (kernel.kind === "sv") return "selected K-slice · ≤128 context/half";
+    if (kernel.kind === "qk") return "complete q vector · 128 elements";
+    return "selected K-slice · ≤256 BF16 elements";
   }
 
   function runtimeOperand(kernel) {
@@ -1061,11 +1445,11 @@
     return "LOCAL OUTPUT";
   }
 
-  function drawPackets(svg, selected, bankGeometry, layout) {
+  function drawPackets(svg, selected, bankGeometry, layout, kernel, deviceColor) {
     var targets = bankGeometry.targets;
     if (!targets.length) return;
     targets.forEach(function (target, index) {
-      var sourceW = Math.max(3, selected.w / targets.length);
+      var sourceW = Math.max(0.35, selected.w / targets.length);
       var sx = selected.x + index * selected.w / targets.length;
       var sy = selected.y + selected.h * 0.18;
       var node = append(svg, "rect", {
@@ -1085,18 +1469,62 @@
         "data-tw": target.w,
         "data-th": target.h
       });
-      node.style.fill = DEVICE_COLORS[(state.device + target.channel) % DEVICE_COLORS.length].fill;
+      node.style.fill = channelColor(kernel, layout, target.channel, deviceColor).fill;
     });
   }
 
   function drawExecutionPhases(svg) {
-    var labels = ["1 · select matrix tile", "2 · place bank slices", "3 · stream operand to GB", "4 · SA compute & reduce"];
-    var startX = 54;
-    var width = 276;
+    var labels = ["1 · select matrix tile", "2 · place tile in banks", "3 · load vector slice → GB", "4 · stream SA4×16 + reduce"];
+    var notes = ["reset", "replay", "replay", "replay"];
+    var startX = 40;
+    var width = 310;
     labels.forEach(function (label, index) {
-      var x = startX + index * (width + 13);
-      append(svg, "rect", { x: x, y: 661, width: width, height: 32, rx: 8, "class": "phase-pill", "data-phase": index + 1 });
-      append(svg, "text", { x: x + width / 2, y: 681, "class": "phase-text", "text-anchor": "middle", "data-phase-text": index + 1 }, label);
+      var phase = index + 1;
+      var x = startX + index * (width + 12);
+      var group = append(svg, "g", {
+        "class": "phase-button",
+        "data-phase-button": phase,
+        "data-phase": phase,
+        role: "button",
+        tabindex: "0",
+        "aria-label": "Play phase " + phase + ": " + label
+      });
+      append(group, "rect", { x: x, y: 742, width: width, height: 48, rx: 10, "class": "phase-pill" });
+      append(group, "text", { x: x + 15, y: 763, "class": "phase-text" }, label);
+      append(group, "text", { x: x + 15, y: 779, "class": "phase-note" }, notes[index] + " this stage");
+      (function (selectedPhase) {
+        group.addEventListener("click", function () { playPhysicalStage(selectedPhase); });
+        group.addEventListener("keydown", function (event) {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            playPhysicalStage(selectedPhase);
+          }
+        });
+      })(phase);
+    });
+  }
+
+  function wireChannelGroupHighlight(svg) {
+    var triggers = svg.querySelectorAll("[data-channel-group-outline], [data-physical-group]");
+    function toggle(group, active) {
+      svg.querySelectorAll("[data-channel-group], [data-channel-group-outline], [data-physical-group]").forEach(function (node) {
+        var raw = node.getAttribute("data-channel-group");
+        if (raw === null) raw = node.getAttribute("data-channel-group-outline");
+        if (raw === null) raw = node.getAttribute("data-physical-group");
+        if (Number(raw) === group) node.classList.toggle("is-linked", active);
+      });
+    }
+    triggers.forEach(function (node) {
+      var raw = node.getAttribute("data-channel-group-outline");
+      if (raw === null) raw = node.getAttribute("data-physical-group");
+      var group = Number(raw);
+      node.setAttribute("tabindex", "0");
+      node.setAttribute("role", "button");
+      node.setAttribute("aria-label", "Highlight channel group " + group);
+      node.addEventListener("mouseenter", function () { toggle(group, true); });
+      node.addEventListener("mouseleave", function () { toggle(group, false); });
+      node.addEventListener("focus", function () { toggle(group, true); });
+      node.addEventListener("blur", function () { toggle(group, false); });
     });
   }
 
@@ -1120,58 +1548,178 @@
   }
 
   function revealPhysicalMapping() {
+    var token = ++state.animationToken;
+    resetPhysicalVisuals();
+    revealBankPanel();
+    document.getElementById("physicalHint").textContent = "Phase 2/4 · tile slices are moving to channel-group banks";
+    animateBankPlacement(token, function () {
+      setPhase(2);
+      schedule(token, reducedMotion() ? 1 : 260, function () {
+        document.getElementById("runtimePanel").classList.add("is-active");
+        document.getElementById("physicalHint").textContent = "Phase 3/4 · selected vector K-slice is loading into GB";
+        animateVectorToGb(token, function () {
+          setPhase(3);
+          schedule(token, reducedMotion() ? 1 : 260, function () {
+            startSaStream();
+            setPhase(4);
+            document.getElementById("physicalHint").textContent = "Phase 4/4 · SA4×16 is streaming · click any phase to replay";
+          });
+        });
+      });
+    });
+  }
+
+  function reducedMotion() {
+    return window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  function setAnimatedRect(node, t) {
+    var eased = 1 - Math.pow(1 - t, 3);
+    ["x", "y", "w", "h"].forEach(function (key) {
+      var sourceKey = key === "w" ? "sw" : key === "h" ? "sh" : "s" + key;
+      var targetKey = key === "w" ? "tw" : key === "h" ? "th" : "t" + key;
+      var source = Number(node.getAttribute("data-" + sourceKey));
+      var target = Number(node.getAttribute("data-" + targetKey));
+      var attr = key === "w" ? "width" : key === "h" ? "height" : key;
+      node.setAttribute(attr, source + (target - source) * eased);
+    });
+    node.style.opacity = t > 0 ? "1" : "0";
+  }
+
+  function resetPhysicalVisuals() {
     var panel = document.getElementById("bankPanel");
-    if (!panel || panel.classList.contains("is-revealed")) return;
-    state.animationToken += 1;
-    var token = state.animationToken;
-    panel.classList.add("is-revealed");
-    document.getElementById("mappingPath").classList.add("is-active");
-    document.getElementById("physicalHint").textContent = "Tile slices are moving to bank rows";
+    var mappingPath = document.getElementById("mappingPath");
+    var vectorPath = document.getElementById("vectorToGbPath");
+    var runtime = document.getElementById("runtimePanel");
+    if (panel) panel.classList.remove("is-revealed");
+    if (mappingPath) mappingPath.classList.remove("is-active");
+    if (vectorPath) vectorPath.classList.remove("is-active");
+    if (runtime) runtime.classList.remove("is-active", "is-streaming");
+    document.querySelectorAll("#physicalViz [data-active-bank='true']").forEach(function (cell) {
+      cell.classList.remove("is-active");
+      cell.style.animationDelay = "0ms";
+    });
+    document.querySelectorAll("#physicalViz [data-packet], #physicalViz [data-vector-packet]").forEach(function (node) {
+      setAnimatedRect(node, 0);
+    });
+    var gbSlot = document.querySelector("#physicalViz [data-gb-slot]");
+    if (gbSlot) gbSlot.classList.remove("is-loading", "is-loaded");
     setPhase(1);
+  }
 
-    var reduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    var packets = Array.prototype.slice.call(document.querySelectorAll("#physicalViz [data-packet]"));
-    var duration = reduced ? 1 : 780;
-    var stagger = reduced ? 0 : 22;
-    var start = performance.now() + (reduced ? 0 : 240);
+  function revealBankPanel() {
+    var panel = document.getElementById("bankPanel");
+    var path = document.getElementById("mappingPath");
+    if (panel) panel.classList.add("is-revealed");
+    if (path) path.classList.add("is-active");
+  }
 
+  function activateBankCells(animate) {
     document.querySelectorAll("#physicalViz [data-active-bank='true']").forEach(function (cell, index) {
-      cell.style.animationDelay = (reduced ? 0 : 350 + (index % 32) * 6 + Math.floor(index / 32) * 7) + "ms";
+      cell.style.animationDelay = (animate && !reducedMotion() ? 130 + (index % 32) * 5 + Math.floor(index / 32) * 6 : 0) + "ms";
       cell.classList.add("is-active");
     });
+  }
 
-    function packetFrame(now) {
+  function finishBankPlacement() {
+    activateBankCells(false);
+    document.querySelectorAll("#physicalViz [data-packet]").forEach(function (node) { setAnimatedRect(node, 1); });
+    setPhase(2);
+  }
+
+  function animateBankPlacement(token, callback) {
+    activateBankCells(true);
+    var packets = Array.prototype.slice.call(document.querySelectorAll("#physicalViz [data-packet]"));
+    var duration = reducedMotion() ? 1 : 700;
+    var stagger = reducedMotion() ? 0 : Math.min(18, 180 / Math.max(packets.length, 1));
+    var start = performance.now() + (reducedMotion() ? 0 : 120);
+    function frame(now) {
       if (token !== state.animationToken) return;
       var complete = true;
       packets.forEach(function (node, index) {
         var t = Math.max(0, Math.min(1, (now - start - index * stagger) / duration));
         if (t < 1) complete = false;
-        var eased = 1 - Math.pow(1 - t, 3);
-        node.style.opacity = t > 0 ? "1" : "0";
-        ["x", "y", "w", "h"].forEach(function (key) {
-          var sourceKey = key === "w" ? "sw" : key === "h" ? "sh" : "s" + key;
-          var targetKey = key === "w" ? "tw" : key === "h" ? "th" : "t" + key;
-          var source = Number(node.getAttribute("data-" + sourceKey));
-          var target = Number(node.getAttribute("data-" + targetKey));
-          var attr = key === "w" ? "width" : key === "h" ? "height" : key;
-          node.setAttribute(attr, source + (target - source) * eased);
-        });
+        setAnimatedRect(node, t);
       });
-      if (!complete) {
-        requestAnimationFrame(packetFrame);
-      } else {
-        setPhase(2);
-        schedule(token, reduced ? 1 : 350, function () {
-          document.getElementById("runtimePanel").classList.add("is-active");
-          setPhase(3);
-        });
-        schedule(token, reduced ? 2 : 760, function () {
-          setPhase(4);
-          document.getElementById("physicalHint").textContent = "Mapping complete · replay or choose another configuration";
-        });
+      if (!complete) requestAnimationFrame(frame);
+      else if (callback) callback();
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function finishVectorToGb() {
+    var vector = document.querySelector("#physicalViz [data-vector-packet]");
+    var path = document.getElementById("vectorToGbPath");
+    var slot = document.querySelector("#physicalViz [data-gb-slot]");
+    var runtime = document.getElementById("runtimePanel");
+    if (runtime) runtime.classList.add("is-active");
+    if (path) path.classList.add("is-active");
+    if (vector) setAnimatedRect(vector, 1);
+    if (slot) {
+      slot.classList.remove("is-loading");
+      slot.classList.add("is-loaded");
+    }
+    setPhase(3);
+  }
+
+  function animateVectorToGb(token, callback) {
+    var vector = document.querySelector("#physicalViz [data-vector-packet]");
+    var path = document.getElementById("vectorToGbPath");
+    var slot = document.querySelector("#physicalViz [data-gb-slot]");
+    if (!vector) {
+      if (callback) callback();
+      return;
+    }
+    if (path) path.classList.add("is-active");
+    if (slot) slot.classList.add("is-loading");
+    var duration = reducedMotion() ? 1 : 680;
+    var start = performance.now() + (reducedMotion() ? 0 : 90);
+    function frame(now) {
+      if (token !== state.animationToken) return;
+      var t = Math.max(0, Math.min(1, (now - start) / duration));
+      setAnimatedRect(vector, t);
+      if (t < 1) requestAnimationFrame(frame);
+      else {
+        finishVectorToGb();
+        if (callback) callback();
       }
     }
-    requestAnimationFrame(packetFrame);
+    requestAnimationFrame(frame);
+  }
+
+  function startSaStream() {
+    var runtime = document.getElementById("runtimePanel");
+    if (!runtime) return;
+    runtime.classList.remove("is-streaming");
+    /* Force a style flush so a clicked phase reliably restarts the wave. */
+    runtime.getBoundingClientRect();
+    runtime.classList.add("is-active", "is-streaming");
+  }
+
+  function playPhysicalStage(phase) {
+    var token = ++state.animationToken;
+    resetPhysicalVisuals();
+    if (phase === 1) {
+      document.getElementById("physicalHint").textContent = "Phase 1/4 · select the highlighted transposed-matrix tile";
+      return;
+    }
+    revealBankPanel();
+    if (phase === 2) {
+      document.getElementById("physicalHint").textContent = "Phase 2/4 · replaying tile placement into banks";
+      animateBankPlacement(token, function () { setPhase(2); });
+      return;
+    }
+    finishBankPlacement();
+    document.getElementById("runtimePanel").classList.add("is-active");
+    if (phase === 3) {
+      document.getElementById("physicalHint").textContent = "Phase 3/4 · replaying vector K-slice load into GB";
+      animateVectorToGb(token, function () { setPhase(3); });
+      return;
+    }
+    finishVectorToGb();
+    startSaStream();
+    setPhase(4);
+    document.getElementById("physicalHint").textContent = "Phase 4/4 · replaying the diagonal SA4×16 stream";
   }
 
   function schedule(token, delay, callback) {
@@ -1181,8 +1729,8 @@
   }
 
   function setPhase(phase) {
-    document.querySelectorAll("#physicalViz [data-phase], #physicalViz [data-phase-text]").forEach(function (node) {
-      var value = Number(node.getAttribute("data-phase") || node.getAttribute("data-phase-text"));
+    document.querySelectorAll("#physicalViz [data-phase]").forEach(function (node) {
+      var value = Number(node.getAttribute("data-phase"));
       node.classList.toggle("is-active", value <= phase);
     });
   }
@@ -1194,21 +1742,21 @@
         ["KV ownership", layout.localKvHeads + " head(s)/device", "Each head retains its complete " + contextLabel(state.context) + " context."],
         ["Physical allocation", number(layout.banksPerHead) + " banks/head", layout.channelsPerHead + " channels per local KV head."],
         ["Context per bank", number(layout.contextsPerBank), "Sequence-striped K-cache positions."],
-        ["QK schedule", layout.sequenceWaves + " × 2 waves", "Sequence waves × two SA4 query waves.", "local"]
+        ["QK schedule", layout.sequenceWaves + " × 2 waves", "The 128-element q vector is staged in GB, then streams through SA4×16.", "local"]
       ];
     } else if (kernel.kind === "sv") {
       facts = [
         ["SV packing", layout.svMode, "Both independent 8-lane halves are used."],
         ["128-dim group", layout.physicalGroupChannels + " channel(s)", dramLabel(state.dram) + " has " + layout.banksPerChannel + " banks/channel."],
         ["Context groups", layout.contextGroups + "/KV head", number(layout.contextsPerHalf) + " context positions per half."],
-        ["SV schedule", layout.queryWaves + " query wave(s)", "Cross-group partials are reduced locally.", "local"]
+        ["SV schedule", layout.queryWaves + " query wave(s)", "GB stages ≤128 context elements/half; cross-group partials reduce locally.", "local"]
       ];
     } else {
       facts = [
         ["Device geometry", "32 × " + layout.banksPerChannel + " banks", number(layout.totalBanks) + " banks · 16 BF16 outputs/bank tile."],
         ["Channel grouping", layout.channelsPerGroup + " ch/group", layout.reductionGroups + " independent reduction group(s)."],
         ["Reduction slice", number(layout.reductionSlice), "K elements stored as DRAM-row segments per group."],
-        ["Output tiling", layout.outputTiles + " tile(s)", kernel.split === "row" ? "Produces a full [8192] partial before TP all-reduce." : kernel.communication, kernel.split === "row" ? "collective" : "local"]
+        ["Output tiling", layout.outputTiles + " tile(s)", (kernel.split === "row" ? "Produces a full [8192] partial before TP all-reduce. " : kernel.communication + " ") + "GB streams ≤256 BF16 K elements into SA4×16.", kernel.split === "row" ? "collective" : "local"]
       ];
     }
     document.getElementById("physicalFacts").innerHTML = facts.map(factHtml).join("");
