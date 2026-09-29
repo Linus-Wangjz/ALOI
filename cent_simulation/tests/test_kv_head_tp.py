@@ -14,6 +14,7 @@ from tp_mapping import (
     KVHeadTPLayout,
     SystolicTPLayout,
     kv_head_tp_shape,
+    pim_precision_geometry,
     validate_kv_head_tp_role,
 )
 
@@ -78,6 +79,9 @@ class SystolicTraceRecorder:
             num_channels=layout.num_channels,
             banks_per_channel=layout.banks_per_channel,
             max_seq_len=layout.max_seq_len,
+            dram_columns=layout.dram_columns,
+            burst_length=layout.burst_length,
+            k_contexts_per_row=layout.dram_columns // layout.shape.head_dim,
         )
         self.systolic_dim = layout.systolic_height
         self.batch_size = layout.systolic_height if batch_size is None else batch_size
@@ -216,7 +220,14 @@ class KVHeadTPShapeTests(unittest.TestCase):
 
 class SystolicTPLayoutTests(unittest.TestCase):
     @staticmethod
-    def layout(tp, systolic_height=4, max_seq_len=4096, banks_per_channel=16):
+    def layout(
+        tp,
+        systolic_height=4,
+        max_seq_len=4096,
+        banks_per_channel=16,
+        dram_columns=1024,
+        burst_length=16,
+    ):
         return SystolicTPLayout(
             shape=kv_head_tp_shape(
                 dim=8192,
@@ -229,7 +240,70 @@ class SystolicTPLayoutTests(unittest.TestCase):
             banks_per_channel=banks_per_channel,
             max_seq_len=max_seq_len,
             systolic_height=systolic_height,
+            dram_columns=dram_columns,
+            burst_length=burst_length,
         )
+
+    @classmethod
+    def fp8_lpddr4x_layout(cls, tp, systolic_height=4, max_seq_len=4096):
+        geometry = pim_precision_geometry("fp8")
+        return cls.layout(
+            tp,
+            systolic_height,
+            max_seq_len,
+            banks_per_channel=8,
+            dram_columns=geometry["dram_columns"],
+            burst_length=geometry["burst_length"],
+        )
+
+    def test_fp8_lpddr4x_uses_one_256_bit_word_for_32_elements(self):
+        geometry = pim_precision_geometry("fp8")
+        self.assertEqual(
+            geometry,
+            {"element_bits": 8, "burst_length": 32, "dram_columns": 2048},
+        )
+
+    def test_fp8_lpddr4x_channel_mapping_matches_bf16_gddr6(self):
+        bf16_gddr6 = self.layout(8)
+        fp8_lpddr4x = self.fp8_lpddr4x_layout(8)
+        for projection in ("q", "kv", "wo", "fused_ffn", "w2"):
+            self.assertEqual(
+                getattr(fp8_lpddr4x, projection),
+                getattr(bf16_gddr6, projection),
+            )
+        bf16_sv = bf16_gddr6.sv(4096)
+        fp8_sv = fp8_lpddr4x.sv(4096)
+        self.assertEqual(fp8_lpddr4x.channels_per_sv_group, 1)
+        self.assertEqual(fp8_sv.channels_per_context_group, 1)
+        self.assertEqual(
+            (
+                fp8_sv.mode,
+                fp8_sv.context_groups_per_kv_head,
+                fp8_sv.contexts_per_half,
+                fp8_sv.query_waves,
+            ),
+            (
+                bf16_sv.mode,
+                bf16_sv.context_groups_per_kv_head,
+                bf16_sv.contexts_per_half,
+                bf16_sv.query_waves,
+            ),
+        )
+        self.assertEqual(fp8_sv.systolic_width, 32)
+
+    def test_fp8_lpddr4x_k_row_packs_sixteen_contexts(self):
+        layout = self.fp8_lpddr4x_layout(8)
+        k_layout = KVHeadTPLayout(
+            shape=layout.shape,
+            num_channels=layout.num_channels,
+            banks_per_channel=layout.banks_per_channel,
+            max_seq_len=layout.max_seq_len,
+            dram_columns=layout.dram_columns,
+            burst_length=layout.burst_length,
+            k_contexts_per_row=layout.dram_columns // layout.shape.head_dim,
+        )
+        self.assertEqual(k_layout.k_contexts_per_row, 16)
+        self.assertEqual(k_layout.k_rows_per_bank, 1)
 
     def test_tp8_projection_groups_match_standard_mapping(self):
         layout = self.layout(8)
@@ -591,6 +665,17 @@ class SystolicTPTraceTests(unittest.TestCase):
         gb = [event for event in recorder.events if event[0] == "WR_GB"]
         self.assertEqual(len(gb), 8)
         self.assertEqual({event[1] for event in gb}, {tuple(range(32))})
+
+    def test_fp8_lpddr4x_sv_matches_bf16_gddr6_pipeline_cycles(self):
+        bf16 = SystolicTraceRecorder(self.layout(systolic_height=4))
+        fp8 = SystolicTraceRecorder(
+            SystolicTPLayoutTests.fp8_lpddr4x_layout(8, systolic_height=4)
+        )
+        bf16.Vector_Matrix_Mul_output_systolic_tp_only_trace(300, 4096)
+        fp8.Vector_Matrix_Mul_output_systolic_tp_only_trace(300, 4096)
+        self.assertEqual(fp8.systolic_pipeline_cycles, bf16.systolic_pipeline_cycles)
+        fp8_gb = [event for event in fp8.events if event[0] == "WR_GB"]
+        self.assertEqual(fp8_gb, [("WR_GB", tuple(range(32)), 32)])
 
 
 class KVHeadTPTraceSchedulingTests(unittest.TestCase):

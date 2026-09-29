@@ -145,6 +145,7 @@ class TransformerBlock(PIM):
                 max_seq_len=self.max_seq_len,
                 dram_columns=self.DRAM_column,
                 burst_length=self.burst_length,
+                k_contexts_per_row=self.DRAM_column // self.head_dim,
             )
             if self.systolic_pim:
                 self.systolic_tp_layout = SystolicTPLayout(
@@ -1286,7 +1287,7 @@ class TransformerBlock(PIM):
     def Vector_Matrix_Mul_output_systolic_tp_only_trace(
         self, row_index_matrix, seqlen, timing="breakdown_sa_output"
     ):
-        """Local SV trace using both independent 8-lane burst halves."""
+        """Local SV trace using both independent half-word operands."""
 
         layout = self.systolic_tp_layout
         if layout is None:

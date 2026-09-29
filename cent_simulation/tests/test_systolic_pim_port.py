@@ -1,5 +1,8 @@
 import ast
+import io
+import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +12,7 @@ CENT_SIM = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CENT_SIM))
 
 import run_sim  # noqa: E402
+from aim_sim import PIM  # noqa: E402
 from systolic_power import SYSTOLIC_PIM_POWER_SCALING  # noqa: E402
 
 
@@ -43,6 +47,56 @@ class SystolicPIMPortTest(unittest.TestCase):
             run_sim.systolic_trace_variant(args),
             "systolic_pim_8_batch_size_8_ewmul_pnm_1_flash_4096",
         )
+
+    def test_fp8_trace_variant_and_startup_width_are_isolated(self):
+        args = SimpleNamespace(
+            precision="fp8",
+            systolic_pim=True,
+            systolic_dim=4,
+            batch_size=1,
+            ewmul_pnm=False,
+            flash_attention=False,
+            num_channels=32,
+            num_banks=8,
+        )
+        self.assertEqual(
+            run_sim.systolic_trace_variant(args),
+            "systolic_pim_4_batch_size_1_ewmul_pnm_1_fp8",
+        )
+        self.assertEqual(run_sim.softmax_pipeline_startup_tokens(args), 8192)
+        self.assertEqual(
+            run_sim.trace_precision_args(args),
+            [
+                "--precision", "fp8",
+                "--DRAM-column", "2048",
+                "--burst-length", "32",
+            ],
+        )
+
+    def test_fp8_sidecar_records_logical_and_physical_widths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            trace_path = Path(directory) / "trace.txt"
+            pim = PIM.__new__(PIM)
+            pim.file = io.StringIO()
+            pim.trace_file = str(trace_path)
+            pim.systolic_pim = True
+            pim.precision = "fp8"
+            pim.burst_length = 32
+            pim.systolic_dim = 4
+            pim.batch_size = 1
+            pim.systolic_pipeline_cycles = {
+                "fill": 0,
+                "reduction": 0,
+                "drain": 0,
+            }
+            pim.finish()
+            metadata = json.loads(
+                Path(str(trace_path) + ".systolic.json").read_text()
+            )
+        self.assertEqual(metadata["precision"], "FP8")
+        self.assertEqual(metadata["element_bits"], 8)
+        self.assertEqual(metadata["physical_word_bits"], 256)
+        self.assertEqual(metadata["array"], {"height": 4, "width": 32})
 
     def test_trace_methods_are_merged_into_existing_classes(self):
         transformer_tree = ast.parse((CENT_SIM / "TransformerBlock.py").read_text())

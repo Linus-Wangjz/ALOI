@@ -24,6 +24,7 @@ if __name__ == "__main__":
         if args.kv_head_tp:
             if not args.model_parallel:
                 raise ValueError("--kv-head-tp requires --model-parallel")
+            # KV-head TP shaped calculated here, shapes are then passed to dic_model to generate zero-filled tensors
             shape = kv_head_tp_shape(
                 dim=dim,
                 query_heads=args.n_heads,

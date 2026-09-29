@@ -43,16 +43,27 @@
             <button type="button" data-value="gddr6" class="is-active">GDDR6</button>
             <button type="button" data-value="lpddr4x">LPDDR4X</button>
           </fieldset>
+
+          <fieldset class="segmented-control precision-control" data-control="precision">
+            <legend>Precision / SA</legend>
+            <button type="button" data-value="bf16" class="is-active">BF16 · 4×16</button>
+            <button type="button" data-value="fp8">FP8 · 4×32</button>
+          </fieldset>
         </div>
 
-        <div class="fixed-config" title="The systolic-array shape is fixed for this explorer">
-          <span>SA</span>
-          <strong>4×16</strong>
+        <div class="fixed-config" title="Decode batch is fixed to four active rows">
+          <span>BATCH</span>
+          <strong>4</strong>
         </div>
       </header>
 
       <nav class="context-bar" aria-label="Visualization breadcrumb">
         <div id="breadcrumb" class="breadcrumb"></div>
+        <fieldset class="segmented-control mapping-control" data-control="mapping">
+          <legend>Channel mapping</legend>
+          <button type="button" data-value="channel_group" class="is-active">Channel Group</button>
+          <button type="button" data-value="reduction_split">Reduction Split</button>
+        </fieldset>
         <div class="context-actions">
           <button id="backButton" class="text-button" type="button" hidden>
             <span aria-hidden="true">←</span> Back
@@ -84,7 +95,7 @@
                   <span>Decoder layer</span>
                   <strong>Transformer Block × 80</strong>
                 </div>
-                <div class="tensor-pill">x · [B, 8192]</div>
+                <div class="tensor-pill">x · [4, 8192]</div>
               </div>
 
               <div class="block-flow">
@@ -95,7 +106,7 @@
                   </div>
 
                   <button class="op-node local-op" type="button" data-kernel="rms1">
-                    <span class="node-kind">PNM</span><strong>RMSNorm</strong><small>[B, 8192]</small>
+                    <span class="node-kind">PNM</span><strong>RMSNorm</strong><small>[4, 8192]</small>
                   </button>
                   <div class="flow-arrow" aria-hidden="true">↓</div>
 
@@ -114,13 +125,15 @@
                   </button>
                   <div class="flow-arrow" aria-hidden="true">↓</div>
 
-                  <div class="parallel-row three-up">
+                  <div class="attention-kernel-chain" aria-label="Serial attention kernel sequence">
                     <button class="op-node matrix-op" type="button" data-kernel="qk">
-                      <span class="node-kind">GEMM</span><strong>Q × Kᵀ</strong><small>Score · [B, 64, L]</small>
+                      <span class="node-kind">GEMM</span><strong>Q × Kᵀ</strong><small>Score · [4, 64, L]</small>
                     </button>
+                    <div class="flow-arrow compact" aria-hidden="true">↓</div>
                     <button class="op-node local-op" type="button" data-kernel="softmax">
                       <span class="node-kind">PNM</span><strong>Softmax</strong><small>FlashAttention stream</small>
                     </button>
+                    <div class="flow-arrow compact" aria-hidden="true">↓</div>
                     <button class="op-node matrix-op" type="button" data-kernel="sv">
                       <span class="node-kind">GEMM</span><strong>Score × V</strong><small>Context aggregation</small>
                     </button>
@@ -135,11 +148,11 @@
                   </div>
                   <div class="flow-arrow" aria-hidden="true">↓</div>
                   <button class="op-node local-op" type="button" data-kernel="residual1">
-                    <span class="node-kind">PNM</span><strong>Residual add</strong><small>[B, 8192]</small>
+                    <span class="node-kind">PNM</span><strong>Residual add</strong><small>[4, 8192]</small>
                   </button>
                 </div>
 
-                <div class="flow-divider"><span>hidden state · [B, 8192]</span></div>
+                <div class="flow-divider"><span>hidden state · [4, 8192]</span></div>
 
                 <div class="flow-section ffn-section">
                   <div class="section-label">
@@ -148,7 +161,7 @@
                   </div>
 
                   <button class="op-node local-op" type="button" data-kernel="rms2">
-                    <span class="node-kind">PNM</span><strong>RMSNorm</strong><small>[B, 8192]</small>
+                    <span class="node-kind">PNM</span><strong>RMSNorm</strong><small>[4, 8192]</small>
                   </button>
                   <div class="flow-arrow" aria-hidden="true">↓</div>
 
@@ -157,7 +170,7 @@
                   </button>
                   <div class="flow-arrow" aria-hidden="true">↓</div>
                   <button class="op-node local-op" type="button" data-kernel="silu">
-                    <span class="node-kind">PNM</span><strong>SiLU(W1) × W3</strong><small>[B, 28,672 / TP]</small>
+                    <span class="node-kind">PNM</span><strong>SiLU(W1) × W3</strong><small>[4, 28,672 / TP]</small>
                   </button>
                   <div class="flow-arrow" aria-hidden="true">↓</div>
 
@@ -169,7 +182,7 @@
                   </div>
                   <div class="flow-arrow" aria-hidden="true">↓</div>
                   <button class="op-node local-op" type="button" data-kernel="residual2">
-                    <span class="node-kind">PNM</span><strong>Residual add</strong><small>output · [B, 8192]</small>
+                    <span class="node-kind">PNM</span><strong>Residual add</strong><small>output · [4, 8192]</small>
                   </button>
                 </div>
               </div>
@@ -226,7 +239,7 @@
           <article id="partitionStage" class="visual-stage">
             <div class="stage-topline">
               <span id="partitionEquation" class="equation"></span>
-              <span class="schematic-label">KV-aware 3D view · dimensions are labeled explicitly</span>
+              <span id="mappingBadge" class="schematic-label">Channel Group Mapping · intra-device policy</span>
             </div>
             <div id="partitionViz" class="svg-host" aria-live="polite"></div>
           </article>
@@ -253,6 +266,7 @@
               <span id="physicalEquation" class="equation"></span>
               <span id="physicalHint" class="interaction-hint">Click the highlighted tile</span>
             </div>
+            <aside id="cycleStats" class="cycle-panel" aria-label="Device cycle estimate" aria-live="polite"></aside>
             <div id="physicalViz" class="svg-host physical-host" aria-live="polite"></div>
           </article>
 
@@ -261,8 +275,8 @@
       </main>
 
       <footer>
-        <span>Decode mapping · no pipeline parallelism</span>
-        <span>BF16 · 32 channels/device · SA 4×16</span>
+        <span>Decode mapping · batch 4 · no pipeline parallelism</span>
+        <span id="footerGeometry">BF16 · 32 channels/device · SA 4×16</span>
       </footer>
     </div>
 

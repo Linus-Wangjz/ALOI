@@ -17,11 +17,34 @@ import math
 
 KV_HEAD_TP_VALUES = (1, 2, 4, 8)
 KV_HEAD_TP_ROLES = ("main", "helper")
+PIM_WORD_BITS = 256
+PIM_ROW_BITS = 16 * 1024
+PIM_PRECISION_GEOMETRY = {
+    "bf16": {
+        "element_bits": 16,
+        "burst_length": PIM_WORD_BITS // 16,
+        "dram_columns": PIM_ROW_BITS // 16,
+    },
+    "fp8": {
+        "element_bits": 8,
+        "burst_length": PIM_WORD_BITS // 8,
+        "dram_columns": PIM_ROW_BITS // 8,
+    },
+}
 SYSTOLIC_SV_PACKING_MODES = (
     "paired_kv_heads",
     "paired_query_groups",
     "paired_context_shards",
 )
+
+
+def pim_precision_geometry(precision: str) -> dict[str, int]:
+    """Return the logical element geometry of one fixed-width PIM word/row."""
+
+    key = precision.lower()
+    if key not in PIM_PRECISION_GEOMETRY:
+        raise ValueError(f"unsupported PIM precision: {precision}")
+    return dict(PIM_PRECISION_GEOMETRY[key])
 
 
 @dataclass(frozen=True)

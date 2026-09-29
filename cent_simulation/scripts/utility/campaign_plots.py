@@ -8,6 +8,24 @@ from typing import Mapping
 import pandas as pd
 
 
+def grouped_metric_figure_width(context_count: int, series_count: int) -> float:
+    """Size scalar campaign plots for the number of bars they contain.
+
+    A one-context, one-memory campaign (such as the checked-in FP8 result)
+    should not inherit the canvas intended for a three-context, multi-memory
+    comparison.  Keep a readable lower bound while allowing wider sweeps to
+    reserve space for their additional bar groups.
+    """
+
+    return min(10.8, max(5.8, 3.9 + 1.0 * context_count + 0.9 * series_count))
+
+
+def grouped_metric_bar_width(series_count: int) -> float:
+    """Avoid letting a lone campaign bar occupy an entire category."""
+
+    return min(0.22, 0.12 + 0.02 * series_count)
+
+
 def plot_grouped_metric(
     rows: pd.DataFrame,
     *,
@@ -48,12 +66,13 @@ def plot_grouped_metric(
         raise ValueError("implicit_architecture is only valid without Architecture")
     plt.style.use("seaborn-v0_8-whitegrid")
     series = [(arch, memory) for arch in architectures for memory in memories]
-    width = min(0.24, 0.75 / max(len(series), 1))
+    width = grouped_metric_bar_width(len(series))
     offsets = [(index - (len(series) - 1) / 2) * width for index in range(len(series))]
     for model in models:
         model_rows = rows[rows["Model"] == model]
         positions = list(range(len(contexts)))
-        fig, ax = plt.subplots(figsize=(10.8, 5.2))
+        figure_width = grouped_metric_figure_width(len(contexts), len(series))
+        fig, ax = plt.subplots(figsize=(figure_width, 5.2))
         reference = None
         if dgx_line:
             if dgx_reference is None:
@@ -116,6 +135,13 @@ def plot_grouped_metric(
         if dgx_line:
             ax.plot(positions, reference, "k--o", linewidth=1.4, markersize=4, label="DGX H100")
         ax.set_xticks(positions, list(contexts))
+        # Matplotlib otherwise autoscales one bar to nearly the entire axes.
+        # Keep a modest category margin, while still expanding for multi-bar
+        # architecture/memory groups.
+        category_half_width = max(
+            0.25, (len(series) - 1) * width / 2 + width / 2 + 0.10
+        )
+        ax.set_xlim(min(positions) - category_half_width, max(positions) + category_half_width)
         ax.set_ylabel(ylabel)
         if not external_title_legend:
             ax.set_title(f"{model}: {title}")

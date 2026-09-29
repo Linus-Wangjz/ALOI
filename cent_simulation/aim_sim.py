@@ -3,6 +3,8 @@ import json
 import math
 
 import torch
+from tp_mapping import PIM_WORD_BITS
+
 torch.multiprocessing.set_sharing_strategy('file_system')
 
 class Bank():
@@ -10,6 +12,7 @@ class Bank():
         self.DRAM_column = args.DRAM_column
         self.DRAM_row = args.DRAM_row
         self.burst_length = args.burst_length
+        self.precision = getattr(args, "precision", "bf16")
         self.arrays = 0 if args.only_trace else torch.zeros(torch.Size([self.DRAM_row, self.DRAM_column]))
         self.latch = 0 if args.only_trace else [0 for _ in range(args.reuse_size)]
         self.systolic_latch = 0 if args.only_trace else torch.zeros(torch.Size([args.systolic_dim, self.burst_length]))
@@ -45,6 +48,7 @@ class PIM():
         self.DRAM_column = args.DRAM_column
         self.DRAM_row = args.DRAM_row
         self.burst_length = args.burst_length
+        self.precision = getattr(args, "precision", "bf16")
         self.num_banks = args.num_banks
         self.num_channels = args.num_channels
         self.systolic_dim = args.systolic_dim
@@ -391,6 +395,9 @@ class PIM():
         self.file.flush()
         if self.systolic_pim:
             metadata = {
+                "precision": self.precision.upper(),
+                "element_bits": PIM_WORD_BITS // self.burst_length,
+                "physical_word_bits": PIM_WORD_BITS,
                 "array": {
                     "height": self.systolic_dim,
                     "width": self.burst_length,

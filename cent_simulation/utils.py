@@ -1,6 +1,8 @@
 import torch
 import argparse
 
+from tp_mapping import PIM_PRECISION_GEOMETRY, pim_precision_geometry
+
 # debug = True
 debug = False
 
@@ -20,9 +22,10 @@ def get_args():
     parser.add_argument("--model", choices=["llama-2-7b", "llama-2-13b", "llama-2-70b", "bloom"], help="model choice")
     parser.add_argument("--GEMV", choices=["reuse-GB", "reuse-bank", "no-reuse"], help="GEMV choice, inner product keeps accumulation results and re-write GB, outer product keeps GB and re-write accumulation register.", default="no-reuse")
     parser.add_argument("--reuse-size", type=int, help="reuse size for either reuse-GB or reuse-bank, depends on number of MAC register size", default=2)
-    parser.add_argument("--DRAM-column", type=int, help="DRAM chip columns", default=1024)
+    parser.add_argument("--precision", choices=sorted(PIM_PRECISION_GEOMETRY), default="bf16", help="PIM operand/cache precision")
+    parser.add_argument("--DRAM-column", type=int, help="Logical tensor elements in one 2 KiB DRAM row")
     parser.add_argument("--DRAM-row", type=int, help="DRAM chip rows", default=1024*16)
-    parser.add_argument("--burst-length", type=int, help="Burst length", default=16)
+    parser.add_argument("--burst-length", type=int, help="Tensor elements processed by one 256-bit PIM word")
     parser.add_argument("--num-banks", type=int, help="bank number per channel", default=16)
     parser.add_argument("--num-channels", type=int, help="channel number per DIMM", default=32)
     parser.add_argument("--max-seq-len", type=int, help="maximum sequence length the model supports", default=4096)
@@ -80,7 +83,7 @@ def get_args():
         type=int,
         choices=[1, 2, 4, 8, 16],
         default=1,
-        help="Systolic array height; the array width is 16",
+        help="Systolic array height; width is one 256-bit PIM word",
     )
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size for systolic PIM")
     parser.add_argument("--total-experts", type=int, default=1)
@@ -100,8 +103,22 @@ def get_args():
         help="Device role for a KV-head TP trace",
     )
     args = parser.parse_args()
+    geometry = pim_precision_geometry(args.precision)
+    if args.DRAM_column is None:
+        args.DRAM_column = geometry["dram_columns"]
+    if args.burst_length is None:
+        args.burst_length = geometry["burst_length"]
     if args.kv_head_tp and args.inter_device_attention:
         parser.error("--kv-head-tp and --inter-device-attention are mutually exclusive")
+    if args.precision == "fp8":
+        if not args.systolic_pim or not args.kv_head_tp:
+            parser.error("--precision fp8 currently requires --systolic-pim and --kv-head-tp")
+        if args.num_banks != 8:
+            parser.error("--precision fp8 currently supports LPDDR4X with 8 banks/channel only")
+        if args.DRAM_column != geometry["dram_columns"]:
+            parser.error("--precision fp8 requires --DRAM-column 2048")
+        if args.burst_length != geometry["burst_length"]:
+            parser.error("--precision fp8 requires --burst-length 32")
     if args.batch_size < 1:
         parser.error("--batch-size must be positive")
     return args
