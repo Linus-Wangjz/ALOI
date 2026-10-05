@@ -396,6 +396,8 @@ def run_model_case(
         "--run_simulation_max_workers", str(args.run_workers),
         "--generate_trace_max_workers", str(args.trace_workers),
     ]
+    if args.phase_breakdown:
+        cmd.append("--phase-breakdown")
     if not args.power_refresh_only:
         cmd.extend(["--generate_trace", "--simulate_trace"])
     if args.include_embedding:
@@ -538,6 +540,7 @@ def main() -> int:
         ),
     )
     parser.add_argument("--include-embedding", action="store_true", help="Include embedding traces/latency. Default is decode-only.")
+    parser.add_argument("--phase-breakdown", action="store_true", help="Measure Attention and FFN stage latency for KV-head TP systolic runs")
     parser.add_argument("--dram-energy-model", choices=["legacy", "trace-based"], default="legacy")
     parser.add_argument("--lpddr4-base-yaml", type=Path, default=ROOT / "aim_simulator/test/example_LPDDR4.yaml")
     parser.add_argument("--gddr6-yaml", type=Path, default=ROOT / "aim_simulator/test/example_GDDR6.yaml")
@@ -646,6 +649,8 @@ def main() -> int:
         raise ValueError("KV-head TP modes and --master-attention are mutually exclusive")
     if args.kv_head_tp and args.kv_head_tp_systolic:
         raise ValueError("--kv-head-tp and --kv-head-tp-systolic are mutually exclusive")
+    if args.phase_breakdown and (not args.kv_head_tp_systolic or args.include_embedding):
+        raise ValueError("--phase-breakdown requires decode-only --kv-head-tp-systolic")
     if args.precision == "fp8" and not args.kv_head_tp_systolic:
         raise ValueError("--precision fp8 requires --kv-head-tp-systolic")
     if args.flash_attention and not args.kv_head_tp_systolic:

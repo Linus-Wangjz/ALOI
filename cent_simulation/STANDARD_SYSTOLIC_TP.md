@@ -173,3 +173,117 @@ rm -f \
   output/kv_head_tp_systolic_all_context/raw/systolic_4x16/LPDDR4X/simulation_results_decode_only_long_context_midpoint_nCCD2.csv \
   output/kv_head_tp_systolic_all_context/raw/systolic_4x16/LPDDR4X/simulation_results_decode_only_long_context_midpoint_nCCD6.csv
 ```
+
+## FP8 Attention/FFN and WR_GB latency
+
+This workflow measures decode-only KV-head TP Systolic 4x32 FP8 blocks. Use
+`--phase-breakdown` when generating the trace and running Ramulator. It places
+an Attention/FFN boundary after the Attention residual add and before the
+second RMSNorm. The boundary is a real all-channel SYNC: Ramulator drains
+Attention requests, records `attention_end_cycles`, and continues FFN in the
+same simulation. An older log without this checkpoint cannot be split
+reliably by post-processing alone.
+
+### Reproduce the 8K, 16K, 32K, and 64K campaigns
+
+Build Ramulator from this checkout so it recognizes the phase marker:
+
+```bash
+cmake -S aim_simulator -B aim_simulator/build
+cmake --build aim_simulator/build -j
+```
+
+Then, from the repository root, activate the CENT Python environment and run:
+
+```bash
+cd cent_simulation
+for spec in 8192:8K 16384:16K 32768:32K 65536:64K; do
+  window=${spec%%:*}
+  context=${spec#*:}
+  root="output/kv_head_tp_systolic_fp8_${context}_phase"
+
+  python scripts/run_cent_memory_cases.py \
+    --kv-head-tp-systolic --precision fp8 \
+    --models Llama2-7B,Llama2-70B --context-windows "$window" \
+    --cases LPDDR4X_nCCD2 \
+    --output-root "$root" \
+    --trace-root "trace/kv_head_tp_systolic_fp8_${context}_phase" \
+    --EWMUL_PNM --phase-breakdown
+
+  python scripts/analyze_kv_head_tp_systolic_all_context.py \
+    --precision FP8 --models Llama2-7B Llama2-70B \
+    --contexts "$context" --memories LPDDR4X_nCCD2 \
+    --dram-vendor winbond --cycle-breakdown \
+    --systolic-raw-root "$root" --output-dir "$root/analysis"
+done
+```
+
+The first command runs all PP/TP/batch candidates and writes the phase
+checkpoint to each Ramulator log. The second selects both best Tokens/J
+and best throughput/device candidates and, with `--cycle-breakdown`,
+records their issued-command traces. It requires
+`aim_simulator/build/ramulator2`. These commands use
+separate `*_phase` roots so earlier campaigns remain available.
+
+### Read the best Tokens/J candidate
+
+For each context, use these files under `$root/analysis`:
+
+| File | Use |
+| --- | --- |
+| `best_tokens_per_joule.csv` | Confirm the selected model, memory, PP, TP, batch, and Tokens/J. |
+| `best_tokens_per_joule_attention_ffn_latency.csv` | Read Attention and FFN PIM, accelerator (`Acc`), CXL, and stage total latency. |
+| `best_tokens_per_joule_wr_gb_attention_ffn_latency.csv` | Read Attention/FFN `WR_GB` cycles and latency for the same selected layout. |
+| `best_tokens_per_joule_pim_cycle_breakdown.csv` | Audit total `WR_GB` cycles, the checkpoint, and the critical command trace. |
+
+Join the two latency files on `Model`, `Context`, `Memory`, `PP`, `TP`,
+and `Batch size`. All latency columns are in **ms per Transformer block**.
+For example, to inspect the 64K best Tokens/J layouts:
+
+```python
+from pathlib import Path
+import pandas as pd
+
+p = Path("output/kv_head_tp_systolic_fp8_64K_phase/analysis")
+keys = ["Model", "Context", "Memory", "PP", "TP", "Batch size"]
+stage = pd.read_csv(p / "best_tokens_per_joule_attention_ffn_latency.csv")
+wr_gb = pd.read_csv(p / "best_tokens_per_joule_wr_gb_attention_ffn_latency.csv")
+result = stage.merge(wr_gb, on=keys, validate="one_to_one")
+print(result[keys + [
+    "Attention stage latency (ms/block)", "FFN stage latency (ms/block)",
+    "Attention WR_GB latency (ms/block)", "FFN WR_GB latency (ms/block)",
+    "WR_GB latency (ms/block)",
+]])
+```
+
+The `selected_attention_ffn_latency.csv` and
+`selected_wr_gb_attention_ffn_latency.csv` files instead use the
+**best throughput/device** layouts. Selection can change with context; check
+PP/TP/batch before comparing rows.
+
+### Accounting and interpretation
+
+Let `C_attention_end` be the drained checkpoint, `C_total` the final
+memory-system cycle, and `tCK_ps` the DRAM clock period. Then
+`Attention PIM = C_attention_end * tCK_ps / 1e9` and
+`FFN PIM = (C_total - C_attention_end) * tCK_ps / 1e9`.
+Attention `Acc` contains the first RMSNorm, RoPE, Softmax, and attention
+reductions; FFN `Acc` contains the second RMSNorm and FFN activation.
+The Wo TP reduction belongs to Attention; the W2 reduction and PP handoff
+belong to FFN. If `--pipelined-softmax` is enabled, its reported `Acc`
+latency is the exposed critical-path portion. Each stage total is its
+PIM + Acc + CXL latency, and the two stage totals reconstruct
+`Block latency (ms)`.
+
+For `WR_GB`, the analyzer selects the channel with the latest issued
+command. It attributes each interval between consecutive issued commands
+to the *later* command. `WRGB` and `CASWRGB` are grouped as `WR_GB`;
+an interval crossing `C_attention_end` is split at that cycle. The
+resulting Attention and FFN cycles are multiplied by `tCK_ps / 1e9`.
+The two `WR_GB` parts must sum to the `WR_GB` total in the command-cycle
+breakdown.
+
+`WR_GB` is a **subset of PIM latency attribution**: do not add it to
+the PIM or stage total. It represents critical-channel issue gaps, including
+wait before each `WR_GB` command, rather than the command's isolated service
+time or the latency saved by removing it.

@@ -325,7 +325,7 @@ def build_systolic_batch_candidate(
         else math.nan
     )
 
-    return {
+    candidate = {
         "Memory": memory,
         "Model": model,
         "Context": context,
@@ -405,6 +405,25 @@ def build_systolic_batch_candidate(
         "Source CSV": balanced.display_path(source_path),
         "Helper role assumption": "one_symmetric_systolic_rank_times_TP_minus_1",
     }
+    phase_columns = (
+        "Attention PIM latency", "FFN PIM latency",
+        "Attention Acc latency", "FFN Acc latency",
+        "Attention CXL latency", "FFN CXL latency",
+        "Attention stage latency", "FFN stage latency",
+    )
+    if all(column in source.index for column in phase_columns):
+        phase = {column: float(source[column]) for column in phase_columns}
+        if has_split_cxl and pp == 1:
+            phase["FFN CXL latency"] -= source_pp_handoff_cxl_ms
+            phase["FFN stage latency"] -= source_pp_handoff_cxl_ms
+        if not math.isclose(
+            phase["Attention stage latency"] + phase["FFN stage latency"],
+            block_ms, rel_tol=1e-9, abs_tol=1e-9,
+        ):
+            raise ValueError(f"{memory}/{model}/{context}/TP={tp}/B={batch_size} phase latency mismatch")
+        candidate.update({f"{key} (ms/block)": value for key, value in phase.items()})
+        candidate["Attention share of block latency"] = phase["Attention stage latency"] / block_ms
+    return candidate
 
 
 def load_systolic_candidates(
@@ -663,6 +682,29 @@ def write_plots(
             cycle_breakdown,
             output_dir / "selected_pim_cycle_breakdown",
         )
+    if "Attention stage latency (ms/block)" in throughput.columns:
+        import matplotlib.pyplot as plt
+
+        selected = throughput.sort_values(["Model", "Context window", "Memory"])
+        labels = [
+            f"{row['Model']} {row['Context']}\nPP{int(row['PP'])}/TP{int(row['TP'])}/B{int(row['Batch size'])}"
+            for _, row in selected.iterrows()
+        ]
+        attention = selected["Attention stage latency (ms/block)"].astype(float)
+        ffn = selected["FFN stage latency (ms/block)"].astype(float)
+        fig, ax = plt.subplots(figsize=(max(7, 2.6 * len(selected)), 4.6))
+        positions = range(len(selected))
+        ax.bar(positions, attention, color="#4C78A8", label="Attention")
+        ax.bar(positions, ffn, bottom=attention, color="#F58518", label="FFN")
+        ax.set_xticks(list(positions), labels)
+        ax.set_ylabel("Transformer block latency (ms)")
+        ax.set_title("Selected Attention and FFN latency")
+        ax.legend()
+        ax.grid(axis="y", alpha=0.25)
+        fig.tight_layout()
+        for extension in ("png", "pdf"):
+            fig.savefig(output_dir / f"selected_attention_ffn_latency.{extension}", dpi=180)
+        plt.close(fig)
 
 
 def write_readme(
@@ -747,6 +789,28 @@ def write_readme(
         " --pipelined-softmax" if pipelined_softmax else ""
     )
     cycle_command_option = " --cycle-breakdown" if cycle_breakdown_enabled else ""
+    phase_breakdown_enabled = "Attention stage latency (ms/block)" in candidates.columns
+    phase_command_option = " --phase-breakdown" if phase_breakdown_enabled else ""
+    phase_note = (
+        "`selected_attention_ffn_latency.csv` uses the best throughput/device layouts; "
+        "`best_tokens_per_joule_attention_ffn_latency.csv` uses the best Tokens/J layouts. "
+        "Both contain Attention and FFN PIM, accelerator, CXL, and total block latencies. "
+        "A simulator SYNC at the boundary drains Attention; its cost belongs "
+        "to Attention. FFN includes final EOC and the pipeline handoff. "
+        "The two stage totals reconstruct the block latency."
+        if phase_breakdown_enabled else ""
+    )
+    phase_usage_note = (
+        "For best Tokens/J results, join "
+        "`best_tokens_per_joule_attention_ffn_latency.csv` and "
+        "`best_tokens_per_joule_wr_gb_attention_ffn_latency.csv` on "
+        "Model, Context, Memory, PP, TP, and Batch size. WR_GB is already "
+        "part of PIM latency, so do not add it to a stage total. "
+        "Reproduction commands, equations, and interpretation are in "
+        "`cent_simulation/STANDARD_SYSTOLIC_TP.md` under "
+        "'FP8 Attention/FFN and WR_GB latency'."
+        if phase_breakdown_enabled and cycle_breakdown_enabled else ""
+    )
     campaign_scope = context_description if len(CONTEXTS) == 1 else "all-context"
     shared_trace_note = (
         " Both LPDDR timings reuse the same trace set."
@@ -775,6 +839,10 @@ Pipelined Softmax is **{pipelined_softmax}**. When enabled, full Softmax energy
 is retained, while only the cent_dev producer-startup fraction remains exposed
 on the latency critical path.
 
+{phase_note}
+
+{phase_usage_note}
+
 It uses {precision}, 16 GiB/device, the {context_description} midpoint samples, and
 {memory_description}. {architecture} evaluates batch 1/2/3/4. Other array
 heights are intentionally excluded. The Systolic raw campaign has
@@ -796,6 +864,8 @@ scalar values exactly. This Systolic-only campaign reconstructs only its own
 source rows; it contains no Vector source-CSV calibration.
 
 {("`selected_pim_cycle_breakdown.csv` and `selected_pim_cycle_breakdown_*` attribute each selected layout's critical PIM trace to issued-command components, using the same classification as AIM Simulator's GEMV cycle breakdown. TraceRecorder sidecars were generated only where they were missing." if cycle_breakdown_enabled else "Issued-command PIM cycle breakdowns are optional: rerun this analysis with `--cycle-breakdown` to record any missing TraceRecorder sidecars and generate them.")}
+
+{("When phase checkpoints are present, `selected_wr_gb_attention_ffn_latency.csv` uses the best throughput/device layout and `best_tokens_per_joule_wr_gb_attention_ffn_latency.csv` uses the best Tokens/J layout. Both split WR_GB critical-channel issue-gap attribution between Attention and FFN; the two parts sum to the WR_GB total. These values are timing attribution, not isolated command execution time." if phase_breakdown_enabled and cycle_breakdown_enabled else "")}
 
 Equal power is evaluated for each memory. First, throughput/device fixes one
 capacity-admitted PP/TP/batch layout; equal-score ties use fewer replica
@@ -819,7 +889,7 @@ Equal-power winners: {len(winners)} total ({len(MEMORIES)} per model/context).
   --kv-head-tp-systolic --precision {precision.lower()} \\
   --models {model_list} --context-windows {context_windows} --cases {runner_case_list} \\
   --output-root {raw_root}{trace_root_option} \\
-  --EWMUL_PNM{flash_command_options}{pipeline_command_option}{' --power-refresh-only' if dram_vendor == 'micron' else ''}
+  --EWMUL_PNM{flash_command_options}{pipeline_command_option}{phase_command_option}{' --power-refresh-only' if dram_vendor == 'micron' else ''}
 
 {sys.executable} scripts/analyze_kv_head_tp_systolic_all_context.py \\
   --precision {precision} --models {model_list} --contexts {context_description.replace('/', ' ')} \\
@@ -898,9 +968,14 @@ def main() -> int:
         ["Model", "Context window", "Architecture", "Memory"]
     )
     cycle_breakdown = None
+    tokens_j_cycle_breakdown = None
     if args.cycle_breakdown:
         cycle_breakdown = build_selected_systolic_cycle_breakdown(
             best_throughput,
+            project_root=ROOT,
+        ).sort_values(["Model", "Context", "Memory"])
+        tokens_j_cycle_breakdown = build_selected_systolic_cycle_breakdown(
+            best_tokens_per_joule,
             project_root=ROOT,
         ).sort_values(["Model", "Context", "Memory"])
     dgx = {
@@ -938,6 +1013,19 @@ def main() -> int:
             f"expected {expected_winners} full-campaign winners, found {len(winners)}"
         )
 
+    phase_columns = [
+        "Model", "Context", "Memory", "PP", "TP", "Batch size",
+        "Attention PIM latency (ms/block)", "FFN PIM latency (ms/block)",
+        "Attention Acc latency (ms/block)", "FFN Acc latency (ms/block)",
+        "Attention CXL latency (ms/block)", "FFN CXL latency (ms/block)",
+        "Attention stage latency (ms/block)", "FFN stage latency (ms/block)",
+        "Attention share of block latency", "Block latency (ms)",
+    ]
+    phase_summary = None
+    tokens_j_phase_summary = None
+    if "Attention stage latency (ms/block)" in best_throughput.columns:
+        phase_summary = best_throughput[phase_columns].copy()
+        tokens_j_phase_summary = best_tokens_per_joule[phase_columns].copy()
     outputs = {
         "all_candidates.csv": candidates,
         "equal_power_deployments.csv": deployments,
@@ -946,14 +1034,35 @@ def main() -> int:
         "best_tokens_per_joule.csv": best_tokens_per_joule,
         "selected_throughput_energy_component_breakdown.csv": component_breakdown,
     }
+    if phase_summary is not None:
+        outputs["selected_attention_ffn_latency.csv"] = phase_summary
+        outputs["best_tokens_per_joule_attention_ffn_latency.csv"] = tokens_j_phase_summary
     for filename, frame in outputs.items():
         path = output_dir / filename
         frame.to_csv(path, index=False)
         print(f"[data] {balanced.display_path(path)}")
-    if cycle_breakdown is not None:
-        cycle_path = output_dir / "selected_pim_cycle_breakdown.csv"
-        write_cycle_breakdown_csv(cycle_breakdown, cycle_path)
+    wr_gb_columns = [
+        "Architecture", "Memory", "Model", "Context", "PP", "TP",
+        "Batch size", "attention_end_cycles", "WR_GB",
+        "Attention WR_GB cycles", "FFN WR_GB cycles",
+        "Attention WR_GB latency (ms/block)",
+        "FFN WR_GB latency (ms/block)",
+        "WR_GB latency (ms/block)",
+        "Critical command trace",
+    ]
+    for selection, breakdown in (
+        ("selected", cycle_breakdown),
+        ("best_tokens_per_joule", tokens_j_cycle_breakdown),
+    ):
+        if breakdown is None:
+            continue
+        cycle_path = output_dir / f"{selection}_pim_cycle_breakdown.csv"
+        write_cycle_breakdown_csv(breakdown, cycle_path)
         print(f"[data] {balanced.display_path(cycle_path)}")
+        if "Attention WR_GB cycles" in breakdown.columns:
+            wr_gb_path = output_dir / f"{selection}_wr_gb_attention_ffn_latency.csv"
+            breakdown[wr_gb_columns].to_csv(wr_gb_path, index=False)
+            print(f"[data] {balanced.display_path(wr_gb_path)}")
 
     manifest = {
         "architectures": list(ARCHITECTURES),
@@ -970,6 +1079,7 @@ def main() -> int:
         ),
         "pipelined_softmax": args.pipelined_softmax,
         "cycle_breakdown": args.cycle_breakdown,
+        "phase_breakdown": "Attention stage latency (ms/block)" in candidates.columns,
         "batch_sizes": list(SYSTOLIC_BATCH_SIZES),
         "tp_values": [1, 2, 4, 8],
         "ramulator_jobs": (

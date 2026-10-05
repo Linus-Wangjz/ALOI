@@ -6,6 +6,7 @@ from scripts.utility.systolic_cycle_breakdown import (
     command_cycle_components,
     select_critical_command_trace,
     trace_recorder_config,
+    wr_gb_phase_cycles,
 )
 
 
@@ -24,6 +25,22 @@ class SystolicCycleBreakdownTest(unittest.TestCase):
         self.assertEqual(components["RD_MAC"], 7)
         self.assertEqual(components["Other"], 8)
         self.assertEqual(sum(components.values()), 20)
+
+    def test_wr_gb_issue_gap_splits_at_attention_boundary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            command_trace = Path(directory) / "trace.cmd.ch0"
+            command_trace.write_text(
+                "0, MAC8, 0\n"
+                "8, WRGB, 0\n"
+                "16, CASWRGB, 0\n"
+                "24, RDMAC8, 0\n"
+                "30, WRGB, 0\n"
+            )
+            self.assertEqual(wr_gb_phase_cycles(command_trace, 12), (12, 10))
+            self.assertEqual(
+                sum(wr_gb_phase_cycles(command_trace, 12)),
+                command_cycle_components(command_trace, 30)["WR_GB"],
+            )
 
     def test_critical_trace_breaks_equal_clock_ties_by_command_count(self):
         with tempfile.TemporaryDirectory() as directory:

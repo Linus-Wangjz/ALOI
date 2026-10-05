@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -250,6 +251,32 @@ def command_cycle_components(
     return values
 
 
+def wr_gb_phase_cycles(command_trace: Path, attention_end_cycles: int) -> tuple[int, int]:
+    """Split WR_GB issue-gap attribution at the drained Attention checkpoint."""
+
+    if attention_end_cycles <= 0:
+        raise ValueError("attention_end_cycles must be positive")
+    attention = ffn = 0
+    issued = parse_command_trace(command_trace)
+    for previous, current in zip(issued, issued[1:]):
+        if current.clock < previous.clock:
+            raise ValueError(f"command trace is not monotonic: {command_trace}")
+        if command_component(current.command) != "WR_GB":
+            continue
+        attention += max(0, min(current.clock, attention_end_cycles) - previous.clock)
+        ffn += max(0, current.clock - max(previous.clock, attention_end_cycles))
+    return attention, ffn
+
+
+def read_attention_end_cycles(log: Path) -> int:
+    """Read the simulator's Attention/FFN SYNC checkpoint."""
+
+    matches = re.findall(r"^attention_end_cycles\s+(\d+)\s*$", log.read_text(), re.MULTILINE)
+    if len(matches) != 1:
+        raise ValueError(f"expected one attention_end_cycles checkpoint in {log}")
+    return int(matches[0])
+
+
 def build_selected_systolic_cycle_breakdown(
     selected: pd.DataFrame,
     *,
@@ -289,6 +316,24 @@ def build_selected_systolic_cycle_breakdown(
         }
         row.update(components)
         row["component_sum"] = sum(components.values())
+        if "Attention PIM latency" in source and pd.notna(source["Attention PIM latency"]):
+            attention_end_cycles = read_attention_end_cycles(log)
+            if not 0 < attention_end_cycles < memory_system_cycles:
+                raise ValueError(f"invalid Attention checkpoint in {log}")
+            attention_wr_gb, ffn_wr_gb = wr_gb_phase_cycles(
+                command_trace, attention_end_cycles
+            )
+            if attention_wr_gb + ffn_wr_gb != components["WR_GB"]:
+                raise ValueError(f"WR_GB phase cycles do not reconstruct total for {log}")
+            tck_ps = float(source["Main PIM latency"]) * 1e9 / memory_system_cycles
+            row.update({
+                "attention_end_cycles": attention_end_cycles,
+                "Attention WR_GB cycles": attention_wr_gb,
+                "FFN WR_GB cycles": ffn_wr_gb,
+                "Attention WR_GB latency (ms/block)": attention_wr_gb * tck_ps / 1e9,
+                "FFN WR_GB latency (ms/block)": ffn_wr_gb * tck_ps / 1e9,
+                "WR_GB latency (ms/block)": components["WR_GB"] * tck_ps / 1e9,
+            })
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -309,6 +354,17 @@ def write_cycle_breakdown_csv(rows: pd.DataFrame, path: Path) -> None:
         "issued_commands",
         *STACK_LABELS,
         "component_sum",
+        *(
+            [
+                "attention_end_cycles",
+                "Attention WR_GB cycles",
+                "FFN WR_GB cycles",
+                "Attention WR_GB latency (ms/block)",
+                "FFN WR_GB latency (ms/block)",
+                "WR_GB latency (ms/block)",
+            ]
+            if "Attention WR_GB cycles" in rows.columns else []
+        ),
         "Source trace",
         "Source log",
         "Critical command trace",
