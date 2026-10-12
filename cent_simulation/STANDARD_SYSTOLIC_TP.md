@@ -275,6 +275,39 @@ latency is the exposed critical-path portion. Each stage total is its
 PIM + Acc + CXL latency, and the two stage totals reconstruct
 `Block latency (ms)`.
 
+### Convert block latency to per-device throughput
+
+A `(ms/block)` value is the elapsed time for **one batch group of
+`Batch size = B` decode tokens** to pass through one Transformer block.
+It is not a per-token service interval. For `L` layers, `PP` pipeline
+stages, `TP` devices per stage, and pipeline fill ratio `f`, the analyzer
+uses:
+
+```text
+T_block = Attention stage latency + FFN stage latency
+T_serial = L * T_block
+T_stage = T_serial / PP
+Replica throughput = 1000 * B * f / T_stage
+Throughput/device = Replica throughput / (PP * TP)
+                  = 1000 * B * f / (L * T_block * TP)
+```
+
+For the Llama2-70B 32K best Tokens/J layout, `PP=8`, `TP=2`,
+`B=4`, `L=80`, and `f=1`. Its stages add to
+`T_block = 0.395373144 + 0.143708466 = 0.539081611 ms`.
+Thus `T_stage = 10 * T_block = 5.390816106 ms`,
+`Replica throughput = 4 * 1000 / T_stage = 742.002680 tokens/s`,
+and `Throughput/device = 742.002680 / 16 = 46.375168 tokens/s/device`.
+The unpipelined single-stream rate, `1000 / (80 * T_block) =
+23.187584 tokens/s`, measures something different. The `TP=2`
+device sharing is already in the per-device denominator; dividing by two
+again would count it twice.
+
+The corresponding raw simulation row uses `Source PP=16` and 32 devices.
+The best Tokens/J candidate uses `PP=8` and 16 devices while reusing
+the same local block trace. Its replica throughput is half of the raw
+source's throughput, and its throughput **per device** is the same.
+
 For `WR_GB`, the analyzer selects the channel with the latest issued
 command. It attributes each interval between consecutive issued commands
 to the *later* command. `WRGB` and `CASWRGB` are grouped as `WR_GB`;

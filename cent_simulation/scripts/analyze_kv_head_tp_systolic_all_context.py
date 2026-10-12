@@ -286,6 +286,9 @@ def build_systolic_batch_candidate(
         )
     block_ms = critical_local_ms + cxl_ms
     serial_ms = layers * block_ms
+    # block_ms times one B-token batch group at a Transformer block. PP stages
+    # overlap; TP devices cooperate on each stage. At full fill, per-device
+    # throughput is 1000 * B / (layers * block_ms * TP).
     ideal_throughput = 1000.0 * pp * batch_size / serial_ms
     replica_throughput = ideal_throughput * fill_ratio
     replica_devices = pp * tp
@@ -806,6 +809,8 @@ def write_readme(
         "`best_tokens_per_joule_wr_gb_attention_ffn_latency.csv` on "
         "Model, Context, Memory, PP, TP, and Batch size. WR_GB is already "
         "part of PIM latency, so do not add it to a stage total. "
+        "Each ms/block value is for one B-token batch group; the per-device "
+        "rate is 1000 * B * fill / (layers * block_ms * TP). "
         "Reproduction commands, equations, and interpretation are in "
         "`cent_simulation/STANDARD_SYSTOLIC_TP.md` under "
         "'FP8 Attention/FFN and WR_GB latency'."
