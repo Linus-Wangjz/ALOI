@@ -17,6 +17,8 @@ import re
 import subprocess
 import sys
 
+import yaml
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AIM_SCRIPTS = REPO_ROOT / "aim_simulator" / "scripts"
 if str(AIM_SCRIPTS) not in sys.path:
@@ -511,13 +513,18 @@ def analyze_case(row, *, log, timing, source_csv, trace=None, metadata_path=None
     stats = read_result_stats(Path(log))
     total_cycles = result_cycles(stats)
     impl, resolved = load_resolved_timing(Path(timing))
+    organization = yaml.safe_load(Path(timing).read_text()).get("organization")
+    if organization is not None:
+        if (organization["channels"] != integer(row, "Channels per device")
+                or organization["prefetch"] * organization["channel_width_bits"]
+                != organization["transaction_bytes"] * 8):
+            raise ValueError("Resolved DRAM organization does not match channels/transaction size")
     period_ps = resolved["tCK_ps"]
     if total_cycles < 0 or period_ps <= 0:
         raise ValueError("Invalid full-run clock/cycles")
     if integer(row, "Channels per device") != 32:
         raise ValueError("Initial v0.0 protocol estimator supports the existing 32-channel target")
     if config is not None:
-        import yaml
         cfg = yaml.safe_load(Path(config).read_text())
         memory = cfg["MemorySystem"]
         if memory["DRAM"]["impl"] != impl:
@@ -655,6 +662,7 @@ def analyze_case(row, *, log, timing, source_csv, trace=None, metadata_path=None
                  "precision": row.get("Precision", "legacy_16bit"), "pim_element_bits": integer(row, "PIM element bits", 16),
                  "array_height": integer(row, "Systolic dim"), "array_width": metadata["array"]["width"] if metadata else None,
                  "dram_timing_impl": impl, "dram_power_label": Path(source_csv).parent.name,
+                 "dram_organization": organization, "nBL": int(resolved["nBL"]),
                  "nCCD": int(resolved["nCCD"]) if "nCCD" in resolved else None,
                  "flash_attention": flag(row, "Flash attention"),
                  "flash_attention_block_size": integer(row, "Flash attention block size", 0),
@@ -811,6 +819,11 @@ def render_summary(report):
         "",
         "部分                                      PIM等效周期     PNM等效周期     CXL等效周期      合计(µs)    占block",
     ]
+    organization = case.get("dram_organization")
+    if organization:
+        lines.insert(2, f"DRAM interface: {organization['channels']} channels × x{organization['channel_width_bits']}; "
+                     f"device DQ={organization['dq_bits']}; prefetch={organization['prefetch']}; "
+                     f"transaction={organization['transaction_bytes']} B; nBL={case['nBL']} clocks.")
     for region in report["regions"]:
         if region["region_id"].endswith("residual"):
             lines.append(f"{region['display_name']}: arithmetic 未建模；旧账本没有单独计时。")

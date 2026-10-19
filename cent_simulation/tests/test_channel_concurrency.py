@@ -48,7 +48,8 @@ class ChannelConcurrencyTests(unittest.TestCase):
         config["Frontend"]["issue_width"] = 32 if concurrent else 1
         config["MemorySystem"]["host_issue_width"] = 32 if concurrent else 1
         config["MemorySystem"]["Controller"]["plugins"] = [
-            {"ControllerPlugin": {"impl": "TraceRecorder", "path": str(root / "issued")}}]
+            {"ControllerPlugin": {"impl": "TraceRecorder", "path": str(root / "issued")}},
+            {"ControllerPlugin": {"impl": "DRAMTimingExporter", "path": str(root / "timing.yaml")}}]
         path = root / "config.yaml"
         path.write_text(yaml.safe_dump(config, sort_keys=False))
         result = subprocess.run([str(BINARY), "-f", str(path), "-t", str(trace)],
@@ -71,14 +72,35 @@ class ChannelConcurrencyTests(unittest.TestCase):
                 gb = [e.clock for e in channel if e.command == "WRGB"]
                 self.assertEqual((len(reads), len(writes), len(gb)), (64, 64, 64))
                 # SYNC drains real completion latency, not just issue order.
-                self.assertGreaterEqual(min(reads), max(writes) + 15)
-                self.assertGreaterEqual(min(gb), max(reads) + 24)
+                self.assertGreaterEqual(min(reads), max(writes) + 19)
+                self.assertGreaterEqual(min(gb), max(reads) + 28)
                 for clocks in (reads, writes, gb):
-                    self.assertTrue(all(b - a >= 4 for a, b in zip(clocks, clocks[1:])))
+                    self.assertTrue(all(b - a >= 8 for a, b in zip(clocks, clocks[1:])))
         for command in ("RD", "WR", "WRGB"):
             simultaneous = set.intersection(*[
                 {e.clock for e in channel if e.command == command} for channel in parallel_events])
             self.assertTrue(simultaneous, f"{command} must actually issue concurrently across channels")
+
+    def test_x16_bus_uses_eight_clocks_but_internal_mac_uses_two(self):
+        trace = ("AiM WR_GB 64 0 0xffffffff\n"
+                 "AiM MAC_ABK 64 0xffffffff 0\n"
+                 "AiM RD_MAC 0 0xffffffff\nAiM SYNC\nAiM EOC\n")
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            _, events = self.simulate(root, True, trace)
+            resolved = yaml.safe_load((root / "timing.yaml").read_text())
+        self.assertEqual(resolved["organization"], {
+            "channels": 32, "channel_width_bits": 16, "dq_bits": 16,
+            "prefetch": 16, "transaction_bytes": 32,
+        })
+        self.assertEqual(resolved["timing"]["nBL"], 8)
+        self.assertEqual(resolved["timing"]["nCCD"], 2)
+        for channel in events:
+            gb = [e.clock for e in channel if e.command == "WRGB"]
+            mac = [e.clock for e in channel if e.command == "MAC8"]
+            self.assertEqual((len(gb), len(mac)), (64, 64))
+            self.assertTrue(all(b - a == 8 for a, b in zip(gb, gb[1:])))
+            self.assertTrue(all(b - a == 2 for a, b in zip(mac, mac[1:])))
 
     def test_different_channels_read_and_write_streams_overlap(self):
         initial = "".join(f"W MEM {channel} 0 0\n" for channel in range(32)) + "AiM SYNC\n"

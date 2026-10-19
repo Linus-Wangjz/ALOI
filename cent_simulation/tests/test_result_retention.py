@@ -1,6 +1,7 @@
 """Verify result cleanup preserves both selected runs and rejects unsafe inputs."""
 
 import csv
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -99,6 +100,60 @@ class RetentionTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 runner.retain_pair(root, traces)
             self.assertTrue((root / "parallel" / "stale").is_file())
+
+
+class InterfaceCorrectionTests(unittest.TestCase):
+    def make_reference(self, root):
+        old = {"run_id": "old", "case": {},
+               "run_identity": {"artifacts": {"trace": {"sha256": "same-host-trace"}},
+                                "source_row": {"Throughput (tokens/s)": "1000", "Token energy (mJ)": "3"}},
+               "full_run_totals": {"pim_native_cycles": 100, "block_latency_ns": 200000},
+               "regions": [{"region_id": "attention.qk", "display_name": "QK",
+                            "legacy_ledger_duration_ns": 200000,
+                            "backends": {"pim": {"reference_equivalent_cycles": 100}},
+                            "pim_issued_gap_details": {"commands": [
+                                {"command": "WRGB", "gap_cycles": 64, "issued_event_count": 16}]}}]}
+        reference = root / "interface_correction_reference.json"
+        reference.write_text(json.dumps({"reports": {"full": old}}))
+        new = copy.deepcopy(old)
+        new["run_id"] = "new"
+        new["case"] = {"dram_organization": runner.LPDDR4_ORGANIZATION, "nBL": 8}
+        new["full_run_totals"] = {"pim_native_cycles": 150, "block_latency_ns": 250000}
+        new["run_identity"]["source_row"] = {"Throughput (tokens/s)": "800", "Token energy (mJ)": "3.6"}
+        region = new["regions"][0]
+        region["legacy_ledger_duration_ns"] = 250000
+        region["backends"]["pim"]["reference_equivalent_cycles"] = 150
+        region["pim_issued_gap_details"]["commands"][0]["gap_cycles"] = 128
+        return new, reference
+
+    def test_compares_latency_throughput_and_kernel_gaps_without_overwriting_reference(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            new, reference = self.make_reference(root)
+            previous = reference.read_bytes()
+            lines = runner.publish_interface_correction(root, {"full": new})
+            with (root / "interface_correction_comparison.csv").open(newline="") as stream:
+                total = next(csv.DictReader(stream))
+            with (root / "kernel_interface_correction.csv").open(newline="") as stream:
+                kernel = next(csv.DictReader(stream))
+            self.assertEqual(float(total["block_us_change_percent"]), 25)
+            self.assertAlmostEqual(float(total["throughput_tokens_s_change_percent"]), -20)
+            self.assertEqual(float(kernel["delta_pim_cycles"]), 50)
+            self.assertEqual((kernel["old_WRGB_count"], kernel["new_WRGB_count"]), ("16", "16"))
+            self.assertEqual((kernel["old_WRGB_cycles"], kernel["new_WRGB_cycles"]), ("64", "128"))
+            self.assertTrue(any("per-kernel" in line for line in lines))
+            self.assertEqual(reference.read_bytes(), previous)
+
+    def test_rejects_changed_host_trace_or_uncorrected_organization(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            new, _ = self.make_reference(root)
+            new["run_identity"]["artifacts"]["trace"]["sha256"] = "different-host-trace"
+            with self.assertRaisesRegex(ValueError, "changed full host trace"):
+                runner.publish_interface_correction(root, {"full": new})
+            new["case"]["nBL"] = 4
+            with self.assertRaisesRegex(ValueError, "corrected x16"):
+                runner.publish_interface_correction(root, {"full": new})
 
 
 if __name__ == "__main__":

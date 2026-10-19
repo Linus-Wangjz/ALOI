@@ -20,6 +20,80 @@ VARIANTS = {
     "flash": ["--flash-attention"],
     "full": ["--channel-concurrency", "--flash-attention", "--pipelined-softmax"],
 }
+LPDDR4_ORGANIZATION = {"channels": 32, "channel_width_bits": 16, "dq_bits": 16,
+                      "prefetch": 16, "transaction_bytes": 32}
+
+
+def publish_interface_correction(root, reports):
+    """Keep the superseded interface comparison separate from current results."""
+    reference_path = root / "interface_correction_reference.json"
+    if not reference_path.exists():
+        return []
+    reference = json.loads(reference_path.read_text())
+    lines = ["", "LPDDR4 interface correction: previous width32/prefetch8/nBL4 -> x16/prefetch16/nBL8.",
+             "Before/after use identical host traces, mapping, precision, and optimization settings.",
+             "PNM/CXL and Softmax overlap remain analytical; internal MAC nCCD stays 2.",
+             "", "variant       old PIM cycles  new PIM cycles  PIM change    old Block(us)  new Block(us)  Block change"]
+    totals, kernels, kernel_lines = [], [], []
+    for variant, report in reports.items():
+        if variant not in reference["reports"]:
+            continue
+        if report["case"].get("dram_organization") != LPDDR4_ORGANIZATION or report["case"].get("nBL") != 8:
+            raise ValueError(f"Cannot label {variant} as corrected x16 LPDDR4")
+        old = reference["reports"][variant]
+        if old["run_identity"]["artifacts"]["trace"]["sha256"] != report["run_identity"]["artifacts"]["trace"]["sha256"]:
+            raise ValueError(f"Interface comparison changed {variant} host trace")
+        before, after = old["full_run_totals"], report["full_run_totals"]
+        item = {"variant": variant, "old_run_id": old["run_id"], "new_run_id": report["run_id"]}
+        for metric, old_value, new_value in (
+            ("pim_cycles", before["pim_native_cycles"], after["pim_native_cycles"]),
+            ("block_us", before["block_latency_ns"] / 1000, after["block_latency_ns"] / 1000),
+            ("throughput_tokens_s", float(old["run_identity"]["source_row"]["Throughput (tokens/s)"]),
+             float(report["run_identity"]["source_row"]["Throughput (tokens/s)"])),
+            ("token_energy_mj", float(old["run_identity"]["source_row"]["Token energy (mJ)"]),
+             float(report["run_identity"]["source_row"]["Token energy (mJ)"])),
+        ):
+            item.update({f"old_{metric}": old_value, f"new_{metric}": new_value,
+                         f"{metric}_change_percent": (new_value / old_value - 1) * 100})
+        totals.append(item)
+        lines.append(f"{variant:<12} {item['old_pim_cycles']:>14,} {item['new_pim_cycles']:>14,} "
+                     f"{item['pim_cycles_change_percent']:>10.2f}% {item['old_block_us']:>16.6f} "
+                     f"{item['new_block_us']:>14.6f} {item['block_us_change_percent']:>12.2f}%")
+        previous = {r["region_id"]: r for r in old["regions"]}
+        kernel_lines.extend(["", f"{variant}: per-kernel interface correction (PIM cycles are issued-gap estimates)",
+                      "kernel                             old PIM      new PIM      delta PIM    old total(us)  new total(us)"])
+        for region in report["regions"]:
+            prior = previous[region["region_id"]]
+            entry = {"variant": variant, "region_id": region["region_id"], "kernel": region["display_name"]}
+            for label, source in (("old", prior), ("new", region)):
+                entry[f"{label}_pim_cycles"] = source["backends"]["pim"]["reference_equivalent_cycles"]
+                entry[f"{label}_total_us"] = source["legacy_ledger_duration_ns"] / 1000
+                commands = {c["command"]: c for c in (source.get("pim_issued_gap_details") or {}).get("commands", [])}
+                for command in ("MAC8", "WRGB"):
+                    entry[f"{label}_{command}_cycles"] = commands.get(command, {}).get("gap_cycles", 0)
+                    entry[f"{label}_{command}_count"] = commands.get(command, {}).get("issued_event_count", 0)
+            if entry["old_pim_cycles"] is not None and entry["new_pim_cycles"] is not None:
+                entry["delta_pim_cycles"] = entry["new_pim_cycles"] - entry["old_pim_cycles"]
+                kernel_lines.append(f"{entry['kernel']:<32} {entry['old_pim_cycles']:>11,.0f} {entry['new_pim_cycles']:>12,.0f} "
+                             f"{entry['delta_pim_cycles']:>14,.0f} {entry['old_total_us']:>15.6f} {entry['new_total_us']:>14.6f}")
+            else:
+                entry["delta_pim_cycles"] = None
+                kernel_lines.append(f"{entry['kernel']}: independent PIM timing unmodeled/unavailable.")
+            kernels.append(entry)
+    for filename, rows in (("interface_correction_comparison.csv", totals), ("kernel_interface_correction.csv", kernels)):
+        if rows:
+            with (root / filename).open("w", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+                writer.writeheader()
+                writer.writerows(rows)
+    if all(variant in reports for variant in ("baseline", "full")):
+        baseline = reports["baseline"]["full_run_totals"]["block_latency_ns"]
+        full = reports["full"]["full_run_totals"]["block_latency_ns"]
+        lines.extend(["", f"Corrected full vs baseline: block latency reduction={(1 - full / baseline) * 100:.2f}%; "
+                      f"throughput ratio={baseline / full:.4f}x.",
+                      "The slower external bus increases GB/register I/O. Baseline score transfer remains limited by serialized host admission.",
+                      "MAC/WRGB work counts are unchanged; control and refresh timing can shift."])
+    return lines + kernel_lines
 
 
 def publish_comparison(root, comparison, commands):
@@ -58,6 +132,12 @@ def publish_comparison(root, comparison, commands):
         lines.append(f"{item['variant']:<12} {int(item['pim_cycles']):>11,} "
                      + " ".join(f"{float(item[key]):>13.6f}" for key in ("pim_us", "pnm_us", "cxl_us", "block_us"))
                      + f" {float(item['score_transfer_cycles']) * 0.000625:>19.6f}")
+    organization = next(iter(reports.values()))["case"].get("dram_organization")
+    if organization:
+        lines.insert(1, f"Resolved interface: {organization['channels']} channels × x{organization['channel_width_bits']}, "
+                     f"prefetch{organization['prefetch']}, {organization['transaction_bytes']} B/burst, "
+                     f"nBL={next(iter(reports.values()))['case']['nBL']} clocks.")
+    lines.extend(publish_interface_correction(root, reports))
     for item in comparison:
         lines.extend(["", "=" * 78, f"{item['variant']} — complete kernel cycle details",
                       f"Stable summary: {item['summary']}", "=" * 78,
@@ -176,6 +256,10 @@ def main():
                        "cent_simulation/aim_sim.py", "cent_simulation/tp_mapping.py",
                        "aim_simulator/src/frontend/impl/memory_trace/aim_trace.cpp",
                        "aim_simulator/src/memory_system/impl/aim_DRAM_system.cpp",
+                       "aim_simulator/src/dram/impl/LPDDR4.cpp",
+                       "aim_simulator/src/dram_controller/impl/plugin/dram_timing_exporter.cpp",
+                       "aim_simulator/src/addr_mapper/impl/linear_mappers.cpp",
+                       "aim_simulator/test/generated/example_LPDDR4X_nCCD2.yaml",
                        "aim_simulator/build/ramulator2", "aim_simulator/libramulator.so"]
     manifest = {"sha256": {name: hashlib.sha256((CENT.parent / name).read_bytes()).hexdigest()
                             for name in tracked_sources}, "python": sys.version}
@@ -185,6 +269,8 @@ def main():
     provenance.write_text(
         "# FP8 LPDDR4 nCCD2 TP2 batch4 optimization comparison\n\n"
         "Window=32768; active decode length=30976; array=4x32; 32 channels; EWMUL_PNM=true.\n"
+        "Corrected LPDDR4 interface: x16/channel; prefetch16; 32 B/burst; nBL8; 625 ps/clock; internal MAC nCCD2.\n"
+        "Supersedes width32/prefetch8/nBL4 results. QK query reloads and all host trace work are unchanged.\n"
         "FP8 geometry and legacy analytical formulas restored from ALOI 637537c.\n"
         "PNM/CXL and streamed Softmax remain legacy analytical models; FlashAttention is a timing-trace abstraction.\n"
         "Concurrent mode accepts at most one request/channel/cycle; DRAM timing and SYNC/EOC remain active.\n"
@@ -224,6 +310,9 @@ def main():
         report = analyze_case(row, source_csv=source, trace=trace, log=log,
                               timing=stem + ".timing.yaml", metadata_path=str(trace) + ".systolic.json",
                               config=stem + ".ramulator.yaml", provenance=run_provenance)
+        if (report["case"]["dram_organization"] != LPDDR4_ORGANIZATION
+                or report["case"]["nBL"] != 8 or report["case"]["nCCD"] != 2):
+            raise ValueError("Rebuild AiM with corrected x16/prefetch16/nBL8 LPDDR4 before publishing")
         report_dir = write_report(report, out / "breakdown")
         totals = report["full_run_totals"]
         comparison.append({"variant": variant, "pim_cycles": totals["pim_native_cycles"],

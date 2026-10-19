@@ -192,6 +192,27 @@ The baseline disables FlashAttention, pipelined Softmax, and channel concurrency
 **EWMUL_PNM stays enabled because systolic PIM forces it on.** It must not be
 described as an all-four-off run.
 
+The current LPDDR4 results use **32 channels × x16, prefetch16, 32-byte
+transactions, and nBL=8 clocks** at 625 ps/clock; internal PIM MAC spacing stays
+nCCD=2. The previous width32/prefetch8/nBL4 model provided twice the intended
+external bandwidth. Both retained runs have been rerun with the corrected
+interface and byte-identical host traces:
+
+| Variant | Previous PIM cycles | Corrected PIM cycles | Previous block (µs) | Corrected block (µs) | Latency increase |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Baseline (EWMUL_PNM ON) | 653,953 | 713,214 | 539.081611 | 576.119736 | 6.87% |
+| Full optimizations | 493,540 | 564,405 | 366.779378 | 411.070003 | 12.08% |
+
+Full optimizations retain a 28.65% block-latency reduction versus the corrected
+baseline. The root summary includes before/after totals and every kernel's
+change; `interface_correction_comparison.csv` and `kernel_interface_correction.csv`
+provide machine-readable comparisons. `interface_correction_reference.json`
+preserves the superseded metrics and source hashes. Resolved timing sidecars
+now export the organization as well as timings, and every new kernel report
+states its actual interface. PNM/CXL and pipelined Softmax remain legacy
+analytical formulas. The separate archived FP8 campaign remains a historical
+record of the former interface model.
+
 To reproduce the requested pair, use `--variants baseline full` (also the
 comparison script's default). To keep only the indexed pair without running
 the simulator, use:
