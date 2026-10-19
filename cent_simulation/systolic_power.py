@@ -1,9 +1,12 @@
 """Shared measured scaling coefficients for the imported systolic PIM arrays."""
 
 
-# Relative PIM command energy for an H x 16 systolic array.  Keep this table
-# shared by the end-to-end driver and the microbenchmark power reporter so a
-# simulated array shape always uses the same fitted coefficient.
+# Relative PIM command energy for an H-row, 256-bit-wide systolic array.  The
+# available measurements are BF16; FP8 functional runs deliberately reuse
+# the fixed-width coefficient until an FP8 circuit-level table is available.
+SYSTOLIC_PIM_POWER_ASSUMPTION = "iso_256b_bf16_calibration"
+
+
 SYSTOLIC_PIM_POWER_SCALING = {
     1: 1.12,
     2: 1.43,

@@ -145,6 +145,7 @@ class TransformerBlock(PIM):
                 max_seq_len=self.max_seq_len,
                 dram_columns=self.DRAM_column,
                 burst_length=self.burst_length,
+                k_contexts_per_row=self.DRAM_column // self.head_dim,
             )
             if self.systolic_pim:
                 self.systolic_tp_layout = SystolicTPLayout(
@@ -1149,6 +1150,12 @@ class TransformerBlock(PIM):
         for _ in range(height):
             self.WR_BIAS_only_trace(channels)
         chunks = math.ceil(reduction_dim / chunk_capacity)
+        if not hasattr(self, "systolic_command_phases"):
+            self.systolic_command_phases = []
+        self.systolic_command_phases.append({
+            "kernel": kernel,
+            "mac_work": reduction_dim + 2 * (height - 1) * chunks,
+        })
         for chunk in range(chunks):
             chunk_size = min(
                 chunk_capacity, reduction_dim - chunk * chunk_capacity

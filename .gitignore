@@ -1,6 +1,9 @@
 __pycache__/
 *.pyc
+.vscode/
 tmp.log
 logs.txt
 /output
+cent_simulation/trace
 cent_simulation/output
+/docs

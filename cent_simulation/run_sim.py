@@ -14,14 +14,29 @@ from cxl_latency import (
     vector_latency,
 )
 from cent_power_calculator import DRAM_ENERGY_MODELS, ACCEL_CYCLE, SHARED_BUFFER_CAPACITY_BYTES, SRAM_IO_PARALLEL, add_energy_terms, kv_head_tp_pnm_dynamic_energy, power_calculator, command_processor, command_trace_prefix_for_log, set_channel_count, KILO, FREQ, SB_RD_CYCLE, SB_WR_CYCLE, RV_RMSNorm_CYCLE, RV_ROTEmbed_CYCLE_PIPELINE, RV_SFT_CYCLE_PIPELINE
-from systolic_power import SYSTOLIC_PIM_POWER_SCALING
-from tp_mapping import KVHeadTPLayout, SystolicTPLayout, kv_head_tp_shape
+from systolic_power import (
+    SYSTOLIC_PIM_POWER_ASSUMPTION,
+    SYSTOLIC_PIM_POWER_SCALING,
+)
+from tp_mapping import (
+    KVHeadTPLayout,
+    PIM_PRECISION_GEOMETRY,
+    SystolicTPLayout,
+    kv_head_tp_shape,
+    pim_precision_geometry,
+)
 from utils import InOut_latency, n_heads, gqa_factor, embedding_size, ffn_size, TransformerBlock_number, minimal_channel_per_block, pipeline_parallel_mode_list, model_parallel_mode_list
 
 def get_args():
     parser = argparse.ArgumentParser('run_scripts.py')
     parser.add_argument("--num_channels", type=int, help="Number of channels per device", default=32)
     parser.add_argument("--num_banks", "--num-banks", dest="num_banks", type=int, help="Number of banks per channel", default=16)
+    parser.add_argument(
+        "--precision",
+        choices=sorted(PIM_PRECISION_GEOMETRY),
+        default="bf16",
+        help="PIM operand/cache precision; fp8 is limited to systolic KV-head TP on LPDDR4X",
+    )
     parser.add_argument(
         "--parallel_SRAM",
         "--parallel-sram",
@@ -58,8 +73,12 @@ def get_args():
     parser.add_argument("--decode_only", "--decode-only", dest="decode_only", action="store_true", help="Skip embedding traces and report decode-only token latency/energy")
     parser.add_argument("--model_parallel", action="store_true", help="Apply model parallelism")
     parser.add_argument("--systolic_pim", "--systolic-pim", dest="systolic_pim", action="store_true", help="Use the systolic PIM trace path")
-    parser.add_argument("--systolic_dim", "--systolic-dim", dest="systolic_dim", type=int, choices=sorted(SYSTOLIC_PIM_POWER_SCALING), default=1, help="Systolic array height; width is 16")
+    parser.add_argument("--systolic_dim", "--systolic-dim", dest="systolic_dim", type=int, choices=sorted(SYSTOLIC_PIM_POWER_SCALING), default=1, help="Systolic array height; width is one 256-bit PIM word")
     parser.add_argument("--batch_size", "--batch-size", dest="batch_size", type=int, default=1, help="Decode batch size; independent of the systolic array height")
+    parser.add_argument("--channel-concurrency", action="store_true",
+                        help="Dispatch up to one request per channel per cycle (32-channel frontend)")
+    parser.add_argument("--record-command-trace", action="store_true",
+                        help="Save issued commands even with the legacy energy model")
     parser.add_argument(
         "--EWMUL_PNM",
         "--EWMUL-PNM",
@@ -116,12 +135,44 @@ def get_args():
         parser.error("--batch-size must be positive")
     if args.parallel_sram < 1:
         parser.error("--parallel-sram must be positive")
+    if args.precision == "fp8":
+        if not args.systolic_pim or not args.kv_head_tp:
+            parser.error("--precision fp8 currently requires --systolic-pim and --kv-head-tp")
+        if args.num_banks != 8:
+            parser.error("--precision fp8 currently supports LPDDR4X with 8 banks/channel only")
+        if args.dram_power_impl not in (None, "LPDDR4X"):
+            parser.error(
+                "--precision fp8 requires --dram-power-impl LPDDR4X"
+            )
+        if "LPDDR4X" not in os.path.basename(args.ramulator_config).upper():
+            parser.error("--precision fp8 requires an LPDDR4X Ramulator config")
+        if args.experiment and not args.experiment.upper().startswith("LPDDR4X"):
+            parser.error("--precision fp8 requires an LPDDR4X experiment")
     set_channel_count(args.num_channels, args.parallel_sram)
     if args.simulation_result_path is None:
         args.simulation_result_path = default_simulation_result_path(args)
     if args.processed_result_path is None:
         args.processed_result_path = default_processed_result_path(args)
     return args
+
+
+def pim_geometry(args):
+    """Return the fixed-256-bit logical geometry selected for this run."""
+
+    return pim_precision_geometry(getattr(args, "precision", "bf16"))
+
+
+def precision_label(args):
+    return getattr(args, "precision", "bf16").upper()
+
+
+def trace_precision_args(args):
+    geometry = pim_geometry(args)
+    return [
+        "--precision", getattr(args, "precision", "bf16"),
+        "--DRAM-column", str(geometry["dram_columns"]),
+        "--burst-length", str(geometry["burst_length"]),
+    ]
 
 
 def factorize(n):
@@ -280,6 +331,10 @@ def systolic_trace_variant(args):
     )
     if args.flash_attention:
         variant += f"_flash_{args.flash_attention_block_size}"
+    if getattr(args, "precision", "bf16") != "bf16":
+        variant += f"_{args.precision}"
+    if getattr(args, "channel_concurrency", False):
+        variant += "_chconcurrent"
     return variant
 
 
@@ -301,12 +356,12 @@ def softmax_pipeline_startup_tokens(args):
     """Number of score positions produced before streamed Softmax can hide.
 
     This is cent_dev's ``pp_init`` model.  A systolic MAC command produces one
-    16-element burst per bank, while the vector path produces one element per
-    bank.  It is a producer/consumer startup window, not the pipeline-parallel
-    stage count.
+    physical 256-bit word per bank (16 BF16 or 32 FP8 elements), while the
+    vector path produces one element per bank.  It is a producer/consumer
+    startup window, not the pipeline-parallel stage count.
     """
 
-    producer_width = 16 if args.systolic_pim else 1
+    producer_width = pim_geometry(args)["burst_length"] if args.systolic_pim else 1
     return producer_width * args.num_channels * args.num_banks
 
 
@@ -350,14 +405,19 @@ def default_simulation_result_path(args):
     _, nccd = split_experiment_name(experiment_name(args))
     phase_suffix = "_decode_only" if args.decode_only else ""
     nccd_suffix = f"_{nccd}" if nccd else ""
-    filename = f"simulation_results{phase_suffix}{nccd_suffix}.csv"
+    precision_suffix = "_fp8" if getattr(args, "precision", "bf16") == "fp8" else ""
+    filename = f"simulation_results{phase_suffix}{precision_suffix}{nccd_suffix}.csv"
     return os.path.join(experiment_output_dir(args), filename)
 
 
 def default_processed_result_path(args):
     _, nccd = split_experiment_name(experiment_name(args))
     suffix = f"_{nccd}" if nccd else ""
-    return os.path.join(experiment_output_dir(args), f"processed_results{suffix}.csv")
+    precision_suffix = "_fp8" if getattr(args, "precision", "bf16") == "fp8" else ""
+    return os.path.join(
+        experiment_output_dir(args),
+        f"processed_results{precision_suffix}{suffix}.csv",
+    )
 
 
 def missing_or_empty(file):
@@ -396,7 +456,8 @@ def trace_based_artifacts_complete(log_file):
     )
 
 
-def write_ramulator_config(base_config, destination, timing_path, command_trace_prefix, include_command_trace):
+def write_ramulator_config(base_config, destination, timing_path, command_trace_prefix, include_command_trace,
+                           channel_concurrency=False):
     lines = Path(base_config).read_text().splitlines(keepends=True)
     output = []
     inserted_plugins = False
@@ -420,12 +481,18 @@ def write_ramulator_config(base_config, destination, timing_path, command_trace_
         raise RuntimeError(f"Could not find the Controller plugins section in {base_config}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text("".join(output))
+    if channel_concurrency:
+        import yaml
+        config = yaml.safe_load(destination.read_text())
+        config["Frontend"]["issue_width"] = 32
+        config["MemorySystem"]["host_issue_width"] = 32
+        destination.write_text(yaml.safe_dump(config, sort_keys=False))
 
 
 def needs_simulation(args, log_file):
     if not timing_artifact_complete(log_file):
         return True
-    return args.dram_energy_model == "trace-based" and not trace_based_artifacts_complete(log_file)
+    return (args.dram_energy_model == "trace-based" or getattr(args, "record_command_trace", False)) and not trace_based_artifacts_complete(log_file)
 
 
 def ramulator_command(args, trace_file, log_file):
@@ -435,7 +502,8 @@ def ramulator_command(args, trace_file, log_file):
         artifacts["config"],
         artifacts["timing"],
         artifacts["command_prefix"],
-        args.dram_energy_model == "trace-based",
+        args.dram_energy_model == "trace-based" or getattr(args, "record_command_trace", False),
+        channel_concurrency=getattr(args, "channel_concurrency", False),
     )
     config = artifacts["config"]
     return f"../aim_simulator/build/ramulator2 -f {config} -t {trace_file}"
@@ -523,6 +591,9 @@ def generate_trace(args, seqlen_list):
                 raise ValueError(f"Channels per block {channels_per_block} is less than minimal channel per block {minimal_channel_per_block[args.model]}")
             if trace_needs_generation(f"{trace_root_dir}/pipeline_parallel/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"):
                 commands_generate_traces.append([python, "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--only-trace", "--num-channels", str(args.num_channels), "--num-banks", str(args.num_banks), "--max-seq-len", str(max_seq_len), "--channels-per-block", str(channels_per_block), "--pipeline-parallel", "--multi-tb-per-device", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", f"{trace_root_dir}/pipeline_parallel/{args.model}/trace_{channels_per_block}_channels_per_block_seqlen_{seqlen}.txt"])
+
+    for command in commands_generate_traces:
+        command.extend(trace_precision_args(args))
 
     if ewmul_pnm_enabled(args):
         for command in commands_generate_traces:
@@ -648,6 +719,7 @@ def process_results(args):
 
 def calculate_acc_latency(args, seqlen, tp=1, device_role="main"):
     latency = {}
+    geometry = pim_geometry(args)
     local_heads = n_heads[args.model] // tp if args.kv_head_tp else n_heads[args.model]
     local_hidden = embedding_size[args.model] // tp if args.kv_head_tp else embedding_size[args.model]
     local_kv_hidden = local_hidden // gqa_factor[args.model]
@@ -721,6 +793,9 @@ def calculate_acc_latency(args, seqlen, tp=1, device_role="main"):
             num_channels=args.num_channels,
             banks_per_channel=args.num_banks,
             max_seq_len=(args.max_seq_len if args.max_seq_len is not None else seqlen),
+            dram_columns=geometry["dram_columns"],
+            burst_length=geometry["burst_length"],
+            k_contexts_per_row=geometry["dram_columns"] // shape.head_dim,
         )
         if args.systolic_pim:
             systolic_layout = SystolicTPLayout(
@@ -731,6 +806,8 @@ def calculate_acc_latency(args, seqlen, tp=1, device_role="main"):
                     args.max_seq_len if args.max_seq_len is not None else seqlen
                 ),
                 systolic_height=args.systolic_dim,
+                dram_columns=geometry["dram_columns"],
+                burst_length=geometry["burst_length"],
             )
             reduction_work = systolic_layout.pnm_reduction_adds(seqlen)
             for name in ("q", "kv", "sv"):
@@ -756,6 +833,7 @@ def calculate_acc_latency(args, seqlen, tp=1, device_role="main"):
 def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per_device, blocks_per_device, embedding_latency, utilized_devices, pp, tp):
 
     log_root_dir = log_root(args)
+    geometry = pim_geometry(args)
     if args.model_parallel:
         main_mode = model_parallel_main_mode(args)
         path = f"{log_root_dir}/{main_mode}/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt.log"
@@ -875,17 +953,21 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
     reduction_adds = 0
     local_ffn_elements = ffn_size[args.model]
     if args.kv_head_tp:
+        kv_shape = kv_head_tp_shape(
+            dim=embedding_size[args.model],
+            query_heads=n_heads[args.model],
+            kv_heads=n_heads[args.model] // gqa_factor[args.model],
+            ffn_dim=ffn_size[args.model],
+            tp=FC_devices,
+        )
         kv_layout = KVHeadTPLayout(
-            shape=kv_head_tp_shape(
-                dim=embedding_size[args.model],
-                query_heads=n_heads[args.model],
-                kv_heads=n_heads[args.model] // gqa_factor[args.model],
-                ffn_dim=ffn_size[args.model],
-                tp=FC_devices,
-            ),
+            shape=kv_shape,
             num_channels=args.num_channels,
             banks_per_channel=args.num_banks,
             max_seq_len=(args.max_seq_len if args.max_seq_len is not None else seqlen),
+            dram_columns=geometry["dram_columns"],
+            burst_length=geometry["burst_length"],
+            k_contexts_per_row=geometry["dram_columns"] // kv_shape.head_dim,
         )
         if args.systolic_pim:
             systolic_layout = SystolicTPLayout(
@@ -896,6 +978,8 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
                     args.max_seq_len if args.max_seq_len is not None else seqlen
                 ),
                 systolic_height=args.systolic_dim,
+                dram_columns=geometry["dram_columns"],
+                burst_length=geometry["burst_length"],
             )
             reduction_adds = sum(
                 systolic_layout.pnm_reduction_adds(seqlen).values()
@@ -973,6 +1057,14 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
                         
     new_result = {
         'Model': args.model,
+        'Precision': precision_label(args),
+        'PIM element bits': geometry["element_bits"],
+        'PIM elements per 256-bit word': geometry["burst_length"],
+        'Systolic PIM power assumption': (
+            SYSTOLIC_PIM_POWER_ASSUMPTION
+            if args.systolic_pim
+            else 'not_applicable'
+        ),
         'Device number': args.num_devices,
         'Pipeline parallelism': pp,
         'Tensor parallelism': tp,
@@ -987,6 +1079,7 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
             args.flash_attention_block_size if args.flash_attention else 0
         ),
         'Pipelined softmax': getattr(args, 'pipelined_softmax', False),
+        'Channel concurrency': getattr(args, 'channel_concurrency', False),
         'Softmax pipeline startup tokens': softmax_pipeline_startup_tokens(args),
         'Softmax exposure factor': softmax_pipeline_factor,
         'Parallel SRAM banks': getattr(
@@ -1054,6 +1147,16 @@ def update_csv(args, seqlen_list):
         )
         if 'DRAM energy model' not in results_df.columns:
             results_df['DRAM energy model'] = 'legacy'
+        if 'Channel concurrency' not in results_df.columns:
+            results_df['Channel concurrency'] = False
+        if 'Precision' not in results_df.columns:
+            results_df['Precision'] = 'BF16'
+        if 'PIM element bits' not in results_df.columns:
+            results_df['PIM element bits'] = 16
+        if 'PIM elements per 256-bit word' not in results_df.columns:
+            results_df['PIM elements per 256-bit word'] = 16
+        if 'Systolic PIM power assumption' not in results_df.columns:
+            results_df['Systolic PIM power assumption'] = 'legacy_unspecified'
         if 'Context window' not in results_df.columns:
             results_df['Context window'] = results_df['Sequence length']
         if 'Main PIM latency' not in results_df.columns:
@@ -1092,7 +1195,7 @@ def update_csv(args, seqlen_list):
         if 'Shared buffer capacity (bytes)' not in results_df.columns:
             results_df['Shared buffer capacity (bytes)'] = 512 * 1024
     else:
-        columns = ['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'EWMUL PNM requested', 'EWMUL PNM effective', 'EWMUL PNM provenance', 'Flash attention', 'Flash attention block size', 'Pipelined softmax', 'Softmax pipeline startup tokens', 'Softmax exposure factor', 'Parallel SRAM banks', 'Shared buffer capacity (bytes)', 'Channels per device', 'Banks per device', 'Channels per block', 'Sequence length', 'Context window', 'PIM latency', 'Main PIM latency', 'Helper PIM latency', 'CXL latency', 'Full softmax latency', 'Exposed softmax latency', 'TransformerBlock latency', 'Embedding latency', 'Token latency (ms)', 'Throughput (tokens/s)', 'Token energy (mJ)', 'Total power (W)', 'Device utilization', 'Attention mapping', 'DRAM energy model']
+        columns = ['Model', 'Precision', 'PIM element bits', 'PIM elements per 256-bit word', 'Systolic PIM power assumption', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'EWMUL PNM requested', 'EWMUL PNM effective', 'EWMUL PNM provenance', 'Flash attention', 'Flash attention block size', 'Pipelined softmax', 'Softmax pipeline startup tokens', 'Softmax exposure factor', 'Parallel SRAM banks', 'Shared buffer capacity (bytes)', 'Channels per device', 'Banks per device', 'Channels per block', 'Sequence length', 'Context window', 'PIM latency', 'Main PIM latency', 'Helper PIM latency', 'CXL latency', 'Full softmax latency', 'Exposed softmax latency', 'TransformerBlock latency', 'Embedding latency', 'Token latency (ms)', 'Throughput (tokens/s)', 'Token energy (mJ)', 'Total power (W)', 'Device utilization', 'Attention mapping', 'DRAM energy model']
         results_df = pd.DataFrame(columns=columns)
 
     embedding_latency = {'pipeline_parallel': {}, 'model_parallel': {}}
@@ -1156,8 +1259,8 @@ def update_csv(args, seqlen_list):
     # The SRAM organization is a hardware revision, not an additional sweep
     # dimension.  Reprocessing an existing workload therefore replaces its
     # legacy single-port result with the current banked-SRAM result.
-    results_df = results_df.drop_duplicates(subset=['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'EWMUL PNM effective', 'EWMUL PNM provenance', 'Flash attention', 'Flash attention block size', 'Pipelined softmax', 'Channels per device', 'Banks per device', 'Channels per block', 'Sequence length', 'Context window', 'Attention mapping', 'DRAM energy model'], keep='last')
-    results_df = results_df.sort_values(by=['Model', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'EWMUL PNM provenance', 'EWMUL PNM effective', 'Flash attention', 'Flash attention block size', 'Pipelined softmax', 'Parallel SRAM banks', 'Channels per device', 'Banks per device', 'Channels per block', 'Context window', 'Sequence length', 'DRAM energy model'])
+    results_df = results_df.drop_duplicates(subset=['Model', 'Precision', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'EWMUL PNM effective', 'EWMUL PNM provenance', 'Flash attention', 'Flash attention block size', 'Pipelined softmax', 'Channel concurrency', 'Channels per device', 'Banks per device', 'Channels per block', 'Sequence length', 'Context window', 'Attention mapping', 'DRAM energy model'], keep='last')
+    results_df = results_df.sort_values(by=['Model', 'Precision', 'Device number', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'EWMUL PNM provenance', 'EWMUL PNM effective', 'Flash attention', 'Flash attention block size', 'Pipelined softmax', 'Parallel SRAM banks', 'Channels per device', 'Banks per device', 'Channels per block', 'Context window', 'Sequence length', 'DRAM energy model'])
     results_df.to_csv(args.simulation_result_path, index=False)
     # print(results_df)
 
@@ -1171,6 +1274,10 @@ def process_throughputs(args):
         raise ValueError(f"File {args.simulation_result_path} does not exist. Generate simulation results first.")
     if 'Banks per device' in df_simulation.columns:
         df_simulation = df_simulation[df_simulation['Banks per device'] == args.num_banks]
+    if 'Precision' in df_simulation.columns:
+        df_simulation = df_simulation[
+            df_simulation['Precision'] == precision_label(args)
+        ]
     if 'DRAM energy model' in df_simulation.columns:
         df_simulation = df_simulation[df_simulation['DRAM energy model'] == args.dram_energy_model]
     if 'Parallel SRAM banks' in df_simulation.columns:
@@ -1199,10 +1306,22 @@ def process_throughputs(args):
             == getattr(args, 'pipelined_softmax', False)
         ]
     
+    for column, expected in {
+        'Channel concurrency': getattr(args, 'channel_concurrency', False),
+        'Flash attention': getattr(args, 'flash_attention', False),
+        'Flash attention block size': args.flash_attention_block_size if args.flash_attention else 0,
+    }.items():
+        if column in df_simulation.columns:
+            df_simulation = df_simulation[df_simulation[column] == expected]
+        elif expected:
+            raise ValueError(f"Simulation results are missing {column} provenance")
+
     if os.path.exists(args.processed_result_path):
         results_df = pd.read_csv(args.processed_result_path)
+        if 'Precision' not in results_df.columns:
+            results_df['Precision'] = 'BF16'
     else:
-        columns = ['Model', 'Device number', 'Banks per device', 'Seqlen', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'EWMUL PNM effective', 'Pipelined softmax', 'Phase', 'DRAM energy model', 'Total Latency (s)', 'Throughput (tokens/s)', 'Energy per Token (mJ)', 'Total power (W)']
+        columns = ['Model', 'Precision', 'Device number', 'Banks per device', 'Seqlen', 'Pipeline parallelism', 'Tensor parallelism', 'Batch size', 'Systolic pim', 'Systolic dim', 'EWMUL PNM effective', 'Pipelined softmax', 'Phase', 'DRAM energy model', 'Total Latency (s)', 'Throughput (tokens/s)', 'Energy per Token (mJ)', 'Total power (W)']
         results_df = pd.DataFrame(columns=columns)
 
 
@@ -1234,6 +1353,7 @@ def process_throughputs(args):
 
             new_result = {
                 'Model': args.model,
+                'Precision': precision_label(args),
                 'Device number': args.num_devices,
                 'Banks per device': args.num_banks,
                 'Seqlen': args.prefill + args.decoding,
@@ -1244,6 +1364,9 @@ def process_throughputs(args):
                 'Systolic dim': args.systolic_dim,
                 'EWMUL PNM effective': ewmul_pnm_enabled(args),
                 'Pipelined softmax': getattr(args, 'pipelined_softmax', False),
+                'Channel concurrency': getattr(args, 'channel_concurrency', False),
+                'Flash attention': args.flash_attention,
+                'Flash attention block size': args.flash_attention_block_size if args.flash_attention else 0,
                 'Phase': args.phase,
                 'DRAM energy model': args.dram_energy_model,
                 'Total Latency (s)': total_latency,
@@ -1275,6 +1398,7 @@ def process_throughputs(args):
 
         new_result = {
             'Model': args.model,
+            'Precision': precision_label(args),
             'Device number': args.num_devices,
             'Banks per device': args.num_banks,
             'Seqlen': args.prefill + args.decoding,
@@ -1285,6 +1409,9 @@ def process_throughputs(args):
             'Systolic dim': args.systolic_dim,
             'EWMUL PNM effective': ewmul_pnm_enabled(args),
             'Pipelined softmax': getattr(args, 'pipelined_softmax', False),
+            'Channel concurrency': getattr(args, 'channel_concurrency', False),
+            'Flash attention': args.flash_attention,
+            'Flash attention block size': args.flash_attention_block_size if args.flash_attention else 0,
             'Phase': args.phase,
             'DRAM energy model': args.dram_energy_model,
             'Total Latency (s)': total_latency,
@@ -1296,7 +1423,7 @@ def process_throughputs(args):
     results_df = pd.concat([results_df, new_result_df], ignore_index=True)
     
     results_df = results_df.drop_duplicates()
-    results_df = results_df.sort_values(by=['Model', 'Device number', 'Banks per device', 'Seqlen', 'Pipeline parallelism', 'Tensor parallelism', 'EWMUL PNM effective', 'Pipelined softmax', 'Phase'])
+    results_df = results_df.sort_values(by=['Model', 'Precision', 'Device number', 'Banks per device', 'Seqlen', 'Pipeline parallelism', 'Tensor parallelism', 'EWMUL PNM effective', 'Pipelined softmax', 'Phase'])
     os.makedirs(os.path.dirname(args.processed_result_path) or ".", exist_ok=True)
     results_df.to_csv(args.processed_result_path, index=False)
 

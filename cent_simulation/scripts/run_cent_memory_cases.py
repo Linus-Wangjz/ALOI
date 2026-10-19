@@ -379,6 +379,7 @@ def run_model_case(
     cmd = [
         sys.executable,
         "run_sim.py",
+        "--precision", getattr(args, "precision", "bf16"),
         "--num_channels", "32",
         "--num_banks", str(case["num_banks"]),
         "--experiment", str(case["name"]),
@@ -397,6 +398,10 @@ def run_model_case(
         "--run_simulation_max_workers", str(args.run_workers),
         "--generate_trace_max_workers", str(args.trace_workers),
     ]
+    if getattr(args, "channel_concurrency", False):
+        cmd.append("--channel-concurrency")
+    if getattr(args, "record_command_trace", False):
+        cmd.append("--record-command-trace")
     if args.include_embedding:
         cmd.append("--process_results")
     else:
@@ -468,6 +473,9 @@ def run_model_case(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--precision", choices=("bf16", "fp8"), default="bf16")
+    parser.add_argument("--channel-concurrency", action="store_true")
+    parser.add_argument("--record-command-trace", action="store_true")
     parser.add_argument("--models", default="Llama2-7B,Llama2-70B")
     parser.add_argument("--contexts", default="4096,32768,131072", help="Explicit comma-separated sequence lengths. Overrides --seqlen-gap/--long-contexts.")
     parser.add_argument("--seqlen-gap", type=int, default=4096)
@@ -626,6 +634,10 @@ def main() -> int:
         raise ValueError("--kv-head-tp and --kv-head-tp-systolic are mutually exclusive")
     if args.flash_attention and not args.kv_head_tp_systolic:
         raise ValueError("--flash-attention requires --kv-head-tp-systolic")
+    if args.precision == "fp8" and not args.kv_head_tp_systolic:
+        raise ValueError("--precision fp8 requires --kv-head-tp-systolic")
+    if args.channel_concurrency and not args.kv_head_tp_systolic:
+        raise ValueError("--channel-concurrency currently requires --kv-head-tp-systolic")
     if args.pipelined_softmax and not args.kv_head_tp_systolic:
         raise ValueError("--pipelined-softmax requires --kv-head-tp-systolic")
     if args.flash_attention_block_size < 1:
@@ -651,6 +663,7 @@ def main() -> int:
         args.paper_long_context = True
         args.skip_pipeline = True
         if args.kv_head_tp_systolic:
+            systolic_variant = "systolic_4x32_fp8" if args.precision == "fp8" else "systolic_4x16"
             args.batch_sizes = sorted(set(args.batch_sizes or [1, 2, 3, 4]))
             invalid_batches = [
                 batch for batch in args.batch_sizes if batch < 1 or batch > 4
@@ -663,12 +676,12 @@ def main() -> int:
             if args.output_root == OUTPUT_ROOT:
                 args.output_root = (
                     OUTPUT_ROOT
-                    / "kv_head_tp_systolic_all_context/raw/systolic_4x16"
+                    / "kv_head_tp_systolic_all_context/raw" / systolic_variant
                 )
             if args.trace_root == TRACE_ROOT:
                 args.trace_root = (
                     TRACE_ROOT
-                    / "kv_head_tp_systolic_all_context/systolic_4x16"
+                    / "kv_head_tp_systolic_all_context" / systolic_variant
                 )
         else:
             if args.output_root == OUTPUT_ROOT:
@@ -799,6 +812,10 @@ def main() -> int:
         if unknown_cases:
             raise ValueError(f"unsupported case(s): {', '.join(unknown_cases)}")
         cases = [case for case in cases if str(case["name"]) in requested_cases]
+    if args.precision == "fp8":
+        if args.cases and any(case["num_banks"] != 8 for case in cases):
+            raise ValueError("FP8 supports LPDDR4X cases with 8 banks/channel only")
+        cases = [case for case in cases if case["num_banks"] == 8]
 
     job_count = planned_ramulator_jobs(
         models,
