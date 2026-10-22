@@ -77,6 +77,8 @@ def get_args():
     parser.add_argument("--batch_size", "--batch-size", dest="batch_size", type=int, default=1, help="Decode batch size; independent of the systolic array height")
     parser.add_argument("--channel-concurrency", action="store_true",
                         help="Dispatch up to one request per channel per cycle (32-channel frontend)")
+    parser.add_argument("--pim-double-buffering", action="store_true",
+                        help="Opt-in LPDDR4 latched PU and two full 2 KiB GBs/channel; uncalibrated extra GB energy")
     parser.add_argument("--record-command-trace", action="store_true",
                         help="Save issued commands even with the legacy energy model")
     parser.add_argument(
@@ -335,6 +337,8 @@ def systolic_trace_variant(args):
         variant += f"_{args.precision}"
     if getattr(args, "channel_concurrency", False):
         variant += "_chconcurrent"
+    if getattr(args, "pim_double_buffering", False):
+        variant += "_gbdouble"
     return variant
 
 
@@ -457,7 +461,7 @@ def trace_based_artifacts_complete(log_file):
 
 
 def write_ramulator_config(base_config, destination, timing_path, command_trace_prefix, include_command_trace,
-                           channel_concurrency=False):
+                           channel_concurrency=False, double_buffering=False):
     lines = Path(base_config).read_text().splitlines(keepends=True)
     output = []
     inserted_plugins = False
@@ -481,11 +485,18 @@ def write_ramulator_config(base_config, destination, timing_path, command_trace_
         raise RuntimeError(f"Could not find the Controller plugins section in {base_config}")
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text("".join(output))
-    if channel_concurrency:
+    if channel_concurrency or double_buffering:
         import yaml
         config = yaml.safe_load(destination.read_text())
-        config["Frontend"]["issue_width"] = 32
-        config["MemorySystem"]["host_issue_width"] = 32
+        if channel_concurrency:
+            config["Frontend"]["issue_width"] = 32
+            config["MemorySystem"]["host_issue_width"] = 32
+        if double_buffering:
+            if config["MemorySystem"]["DRAM"]["impl"] != "LPDDR4":
+                raise ValueError("--pim-double-buffering requires LPDDR4")
+            controller = config["MemorySystem"]["Controller"]
+            controller.update(impl="AiMAsync", gb_buffer_count=2, serialize_loads=False,
+                              observer_path=str(command_trace_prefix) + ".tasks")
         destination.write_text(yaml.safe_dump(config, sort_keys=False))
 
 
@@ -504,6 +515,7 @@ def ramulator_command(args, trace_file, log_file):
         artifacts["command_prefix"],
         args.dram_energy_model == "trace-based" or getattr(args, "record_command_trace", False),
         channel_concurrency=getattr(args, "channel_concurrency", False),
+        double_buffering=getattr(args, "pim_double_buffering", False),
     )
     config = artifacts["config"]
     return f"../aim_simulator/build/ramulator2 -f {config} -t {trace_file}"
@@ -1080,6 +1092,8 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
         ),
         'Pipelined softmax': getattr(args, 'pipelined_softmax', False),
         'Channel concurrency': getattr(args, 'channel_concurrency', False),
+        'PIM double buffering': getattr(args, 'pim_double_buffering', False),
+        'GB energy calibration': 'extra_GB_uncalibrated' if getattr(args, 'pim_double_buffering', False) else 'legacy_single_GB',
         'Softmax pipeline startup tokens': softmax_pipeline_startup_tokens(args),
         'Softmax exposure factor': softmax_pipeline_factor,
         'Parallel SRAM banks': getattr(
@@ -1308,10 +1322,13 @@ def process_throughputs(args):
     
     for column, expected in {
         'Channel concurrency': getattr(args, 'channel_concurrency', False),
+        'PIM double buffering': getattr(args, 'pim_double_buffering', False),
         'Flash attention': getattr(args, 'flash_attention', False),
         'Flash attention block size': args.flash_attention_block_size if args.flash_attention else 0,
     }.items():
         if column in df_simulation.columns:
+            if column == 'PIM double buffering':
+                df_simulation[column] = df_simulation[column].fillna(False)
             df_simulation = df_simulation[df_simulation[column] == expected]
         elif expected:
             raise ValueError(f"Simulation results are missing {column} provenance")
@@ -1365,6 +1382,7 @@ def process_throughputs(args):
                 'EWMUL PNM effective': ewmul_pnm_enabled(args),
                 'Pipelined softmax': getattr(args, 'pipelined_softmax', False),
                 'Channel concurrency': getattr(args, 'channel_concurrency', False),
+                'PIM double buffering': getattr(args, 'pim_double_buffering', False),
                 'Flash attention': args.flash_attention,
                 'Flash attention block size': args.flash_attention_block_size if args.flash_attention else 0,
                 'Phase': args.phase,
@@ -1410,6 +1428,7 @@ def process_throughputs(args):
             'EWMUL PNM effective': ewmul_pnm_enabled(args),
             'Pipelined softmax': getattr(args, 'pipelined_softmax', False),
             'Channel concurrency': getattr(args, 'channel_concurrency', False),
+            'PIM double buffering': getattr(args, 'pim_double_buffering', False),
             'Flash attention': args.flash_attention,
             'Flash attention block size': args.flash_attention_block_size if args.flash_attention else 0,
             'Phase': args.phase,

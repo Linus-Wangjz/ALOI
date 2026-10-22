@@ -304,7 +304,7 @@ def phase_budgets(metadata):
     return phases
 
 
-def trace_work(trace_path, metadata, channel):
+def trace_work(trace_path, metadata, channel, *, host_regions=None):
     """Decode observed commands against sidecar budgets, not a mapping algorithm.
 
     This supports the non-Flash standard-TP emission order. Ownership remains
@@ -317,11 +317,13 @@ def trace_work(trace_path, metadata, channel):
     counts = Counter()
     region_counts = defaultdict(Counter)
     last_opcode = None
+    host_id = -1
     with Path(trace_path).open() as stream:
         for line_number, line in enumerate(stream, 1):
             fields = line.split()
             if not fields or fields[0] == "#":
                 continue
+            host_id += 1
             prefix = fields[:2]
             if prefix in (["R", "MEM"], ["W", "MEM"]):
                 family = fields[0] + "_MEM"
@@ -331,6 +333,8 @@ def trace_work(trace_path, metadata, channel):
                     region = "aux.score_transfer"
                 else:
                     raise ValueError(f"Unrecognized MEM phase at trace line {line_number}")
+                if host_regions is not None:
+                    host_regions[host_id] = region
                 counts[family] += 1
                 region_counts[region][family] += 1
                 if int(fields[2]) == channel:
@@ -351,11 +355,15 @@ def trace_work(trace_path, metadata, channel):
             region = PIM_REGIONS[phases[index][0]]
             if opcode in ("AF", "RD_AF"):
                 region = "aux.ffn_activation"
+            if host_regions is not None:
+                host_regions[host_id] = "aux.sync_control" if opcode in ("SYNC", "EOC") else region
             if opcode in ("SYNC", "EOC"):
                 region_counts["aux.sync_control"][opcode] += 1
                 continue
             if opcode == "EWADD":
                 residual = "aux.attention_residual" if phases[index][0] == "wo" else "aux.ffn_residual"
+                if host_regions is not None:
+                    host_regions[host_id] = residual
                 region_counts[residual][opcode] += 1
                 continue
             if opcode not in ("MAC_ABK", "WR_GB", "WR_BIAS", "RD_MAC", "AF", "RD_AF"):
@@ -508,6 +516,8 @@ def git_identity():
 
 def analyze_case(row, *, log, timing, source_csv, trace=None, metadata_path=None,
                  config=None, provenance=None, command_trace=None, estimator="auto"):
+    if flag(row, "PIM double buffering"):
+        raise ValueError("AiMAsync requires completion-observer accounting, not legacy issued gaps")
     if estimator not in ("auto", "issued-gap", "service-work"):
         raise ValueError(f"Unknown estimator: {estimator}")
     stats = read_result_stats(Path(log))
@@ -532,6 +542,8 @@ def analyze_case(row, *, log, timing, source_csv, trace=None, metadata_path=None
         for node in (cfg["Frontend"], memory, memory["Controller"]):
             if node.get("clock_ratio", 1) != 1:
                 raise ValueError("Initial v0.0 estimates require clock_ratio=1")
+        if memory["Controller"]["impl"] == "AiMAsync":
+            raise ValueError("AiMAsync overlaps command domains; use scripts/run_double_buffering_case.py, not issued-gap attribution")
         configured_nccd = memory["DRAM"]["timing"].get("nCCD")
         if configured_nccd is not None and configured_nccd != resolved.get("nCCD"):
             raise ValueError("Configured/resolved nCCD mismatch")
