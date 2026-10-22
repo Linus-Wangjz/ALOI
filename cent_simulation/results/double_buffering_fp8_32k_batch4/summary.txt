@@ -1,0 +1,3172 @@
+FP8 SA4x32 / LPDDR4 nCCD2 / TP2 / batch4 / window32768 / active30976
+Baseline keeps EWMUL_PNM on; Flash, pipelined Softmax and channel concurrency off.
+Full enables all four. Each variant replays its original host trace byte-for-byte.
+L=legacy, A1=async single GB, A2=async two GB serialized, A3=async two GB overlapping.
+A3 vs A2 isolates overlap; A1/A2 vs L also changes the command/mode execution profile.
+PNM/CXL/Softmax exposure unchanged analytical formulas; extra GB energy uncalibrated.
+
+Variant    Profile                PIM cycles   Block(us)  PIM reduction  Block reduction
+baseline   legacy                   713,214  576.119736         0.00%           0.00%
+baseline   async-single             703,088  569.790986         1.42%           1.10%
+baseline   async-serialized         703,088  569.790986         1.42%           1.10%
+baseline   double                   624,183  520.475361        12.48%           9.66%
+full       legacy                   564,405  411.070003         0.00%           0.00%
+full       async-single             564,599  411.191253        -0.03%          -0.03%
+full       async-serialized         564,599  411.191253        -0.03%          -0.03%
+full       double                   512,470  378.610628         9.20%           7.90%
+baseline: overlap alone reduces PIM 11.22%; block 8.66%; 78,905 PIM clocks.
+full: overlap alone reduces PIM 9.23%; block 7.92%; 52,129 PIM clocks.
+
+==============================================================================
+baseline/legacy
+==============================================================================
+Replayed legacy controller: exact full-run cycle match to reference.
+Llama2-70B legacy v0.0 cycle breakdown — LPDDR4 nCCD=2, TP=2, batch=4
+精度：FP8；PIM 阵列：4×32。
+DRAM interface: 32 channels × x16; device DQ=16; prefetch=16; transaction=32 B; nBL=8 clocks.
+Context window：32,768；实际 decode 长度：30,976。
+优化开关：EWMUL_PNM=True；FlashAttention=False（block=0）；pipelined_softmax=False；channel_concurrency=False。
+范围：一个代表 rank 上一个 block 的 batch group；PP=16，未乘 80 层或 TP。
+参考周期：625 ps；下列周期均为该时钟的等效周期。
+整条 trace 的 PIM 实测周期：713,214。
+Legacy block 合计：576.119736 µs；等效周期 921,791.577。
+其中 PIM=445.758750 µs，PNM=103.980000 µs，CXL=26.380986 µs。
+每个输出 token 的摊销 block 时间：144.029934 µs（不是单请求端到端 token latency）。
+PIM 分项方法：legacy_tp_issued_gap_v1，参考 channel=15。
+PIM kernel 分项是估算归因，未观测 completion；PNM/CXL 是 legacy 公式。K/V、Up/Gate 保持融合。
+
+部分                                      PIM等效周期     PNM等效周期     CXL等效周期      合计(µs)    占block
+Attention RMSNorm                               0.000         720.000           0.000       0.450000      0.08%
+Q Projection                               19,640.000         102.400           0.000      12.339000      2.14%
+K/V Projection                              4,750.000         179.200           0.000       3.080750      0.53%
+QK                                         93,686.000           0.000           0.000      58.553750     10.16%
+SV                                         94,126.000       1,536.000           0.000      59.788750     10.38%
+O Projection                               19,741.000           0.000      16,883.831      22.890519      3.97%
+FFN RMSNorm                                     0.000         720.000           0.000       0.450000      0.08%
+Up/Gate Projection                        157,727.000           0.000           0.000      98.579375     17.11%
+Down Projection                            69,372.000           0.000      16,883.831      53.909894      9.36%
+RoPE Q                                          0.000       5,017.600           0.000       3.136000      0.54%
+RoPE K                                          0.000         627.200           0.000       0.392000      0.07%
+KV Update                                   1,403.000           0.000           0.000       0.876875      0.15%
+Softmax                                         0.000     156,748.800           0.000      97.968000     17.00%
+Score Transfer                            248,552.000           0.000           0.000     155.345000     26.96%
+FFN Activation                                211.000         716.800           0.000       0.579875      0.10%
+Attention Residual: arithmetic 未建模；旧账本没有单独计时。
+FFN Residual: arithmetic 未建模；旧账本没有单独计时。
+PP Handoff                                      0.000           0.000       8,441.915       5.276197      0.92%
+Unattributed / Background / Tail            4,006.000           0.000           0.000       2.503750      0.43%
+
+逐 kernel 的 PIM / PNM / CXL 周期组成
+等效周期统一按 PIM 参考时钟换算；PNM formula cycles 使用其独立时钟。
+以下是已有总计的展开，不重复计时；未建模项不能解释为硬件耗时为零。
+
+Attention RMSNorm [attention.rmsnorm]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 900.000000 formula cycles × 0.5 ns = 450.000000 ns = 720.000000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：450.000000 ns = 720.000000 等效周期。
+
+Q Projection [attention.q_projection]
+  PIM: 19,640.000000 归属周期 × 0.625 ns = 12,275.000000 ns。
+  PNM: 128.000000 formula cycles × 0.5 ns = 64.000000 ns = 102.400000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：12,339.000000 ns = 19,742.400000 等效周期。
+
+K/V Projection [attention.kv_projection]
+  PIM: 4,750.000000 归属周期 × 0.625 ns = 2,968.750000 ns。
+  PNM: 224.000000 formula cycles × 0.5 ns = 112.000000 ns = 179.200000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：3,080.750000 ns = 4,929.200000 等效周期。
+
+QK [attention.qk]
+  PIM: 93,686.000000 归属周期 × 0.625 ns = 58,553.750000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：58,553.750000 ns = 93,686.000000 等效周期。
+
+SV [attention.sv]
+  PIM: 94,126.000000 归属周期 × 0.625 ns = 58,828.750000 ns。
+  PNM: 1,920.000000 formula cycles × 0.5 ns = 960.000000 ns = 1,536.000000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：59,788.750000 ns = 95,662.000000 等效周期。
+
+O Projection [attention.o_projection]
+  PIM: 19,741.000000 归属周期 × 0.625 ns = 12,338.125000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 10,552.394257 ns / 0.625 ns = 16,883.830811 等效周期（legacy 公式）。
+  Legacy 合计：22,890.519257 ns = 36,624.830811 等效周期。
+
+FFN RMSNorm [ffn.rmsnorm]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 900.000000 formula cycles × 0.5 ns = 450.000000 ns = 720.000000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：450.000000 ns = 720.000000 等效周期。
+
+Up/Gate Projection [ffn.up_gate_projection]
+  PIM: 157,727.000000 归属周期 × 0.625 ns = 98,579.375000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：98,579.375000 ns = 157,727.000000 等效周期。
+
+Down Projection [ffn.down_projection]
+  PIM: 69,372.000000 归属周期 × 0.625 ns = 43,357.500000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 10,552.394257 ns / 0.625 ns = 16,883.830811 等效周期（legacy 公式）。
+  Legacy 合计：53,909.894257 ns = 86,255.830811 等效周期。
+
+RoPE Q [aux.rope_q]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 6,272.000000 formula cycles × 0.5 ns = 3,136.000000 ns = 5,017.600000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：3,136.000000 ns = 5,017.600000 等效周期。
+
+RoPE K [aux.rope_k]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 784.000000 formula cycles × 0.5 ns = 392.000000 ns = 627.200000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：392.000000 ns = 627.200000 等效周期。
+
+KV Update [aux.kv_update]
+  PIM: 1,403.000000 归属周期 × 0.625 ns = 876.875000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：876.875000 ns = 1,403.000000 等效周期。
+
+Softmax [aux.softmax]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 195,936.000000 formula cycles × 0.5 ns = 97,968.000000 ns = 156,748.800000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：97,968.000000 ns = 156,748.800000 等效周期。
+
+FlashAttention Merge [aux.flash_merge]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：0.000000 ns = 0.000000 等效周期。
+
+Score Transfer [aux.score_transfer]
+  PIM: 248,552.000000 归属周期 × 0.625 ns = 155,345.000000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：155,345.000000 ns = 248,552.000000 等效周期。
+
+FFN Activation [aux.ffn_activation]
+  PIM: 211.000000 归属周期 × 0.625 ns = 131.875000 ns。
+  PNM: 896.000000 formula cycles × 0.5 ns = 448.000000 ns = 716.800000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：579.875000 ns = 927.800000 等效周期。
+
+Attention Residual [aux.attention_residual]
+  PIM: unmodeled；独立执行时间 unavailable。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：0.000000 ns = 0.000000 等效周期。
+
+FFN Residual [aux.ffn_residual]
+  PIM: unmodeled；独立执行时间 unavailable。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：0.000000 ns = 0.000000 等效周期。
+
+PP Handoff [aux.pp_handoff]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 5,276.197128 ns / 0.625 ns = 8,441.915405 等效周期（legacy 公式）。
+  Legacy 合计：5,276.197128 ns = 8,441.915405 等效周期。
+
+SYNC / Control [aux.sync_control]
+  PIM: unavailable；独立执行时间 unavailable。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：0.000000 ns = 0.000000 等效周期。
+
+Unattributed / Background / Tail [aux.unattributed]
+  PIM: 4,006.000000 归属周期 × 0.625 ns = 2,503.750000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：2,503.750000 ns = 4,006.000000 等效周期。
+
+PIM 发射事件间隔明细
+参考 channel=15；单位为 625 ps 的参考周期。
+下列明细展开上表的 PIM 分项，已经计入 block 总计，不再额外相加。
+间隔归给后一个发射事件；前置命令关联后续 terminal 所属部分。包含等待，不等同命令执行或 completion latency。
+STARTUP/TAIL 是区间记录，不是发射命令；刷新等未归属事件保留在 Unattributed 中。
+Resolved timing（cycles）：nCCD=2, nMODCH=32, nRCDRDMAC=49, nRFCab=288, nRPab=34, nRTP=12。
+
+Q Projection [attention.q_projection]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              11,324
+  WRGB：写入输入 GB                                       4,040
+  WRMAC8：初始化累加器，对应 WR_BIAS                              25
+  RDMAC8：读取结果                                            4
+  ACT / PRE                                          3,734
+  TMOD / CAS 等控制命令                                     513
+  PIM 合计                                            19,640
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                       66            2,748
+    ACT8-2                       66               66
+    CASRDMAC8                     4               59
+    CASWRGB                       8              256
+    CASWRMAC8                     1               32
+    MAC8                      4,144           11,324
+    PREA                         65              920
+    RDMAC8                        4                4
+    TMOD                         18              166
+    WRGB                        512            4,040
+    WRMAC8                        4               25
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48           66            3,168
+    MAC8                          2        4,078            8,156
+    以每条 nCCD=2 为参考预算：4,144 × 2 = 8,288；实际归属 11,324；差额 3,036。
+  Backend 合计（等效周期）：PIM=19,640.000 + PNM=102.400 + CXL=0.000 = 19,742.400。
+
+K/V Projection [attention.kv_projection]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                               2,808
+  WRGB：写入输入 GB                                       1,017
+  WRMAC8：初始化累加器，对应 WR_BIAS                              25
+  RDMAC8：读取结果                                            4
+  ACT / PRE                                            792
+  TMOD / CAS 等控制命令                                     104
+  PIM 合计                                             4,750
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                       16              544
+    ACT8-2                       16               16
+    CASRDMAC8                     4               59
+    CASWRGB                       1               32
+    CASWRMAC8                     1                9
+    MAC8                      1,036            2,808
+    PREA                         16              232
+    RDMAC8                        4                4
+    TMOD                          4                4
+    WRGB                        128            1,017
+    WRMAC8                        4               25
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48           16              768
+    MAC8                          2        1,020            2,040
+    以每条 nCCD=2 为参考预算：1,036 × 2 = 2,072；实际归属 2,808；差额 736。
+  Backend 合计（等效周期）：PIM=4,750.000 + PNM=179.200 + CXL=0.000 = 4,929.200。
+
+QK [attention.qk]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              46,218
+  WRGB：写入输入 GB                                      16,363
+  WRMAC8：初始化累加器，对应 WR_BIAS                           3,193
+  RDMAC8：读取结果                                          512
+  ACT / PRE                                         17,519
+  TMOD / CAS 等控制命令                                   9,881
+  PIM 合计                                            93,686
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                      264           11,252
+    ACT8-2                      263              263
+    CASRDMAC8                   512            7,553
+    CASWRGB                       3               96
+    CASWRMAC8                   129            1,207
+    MAC8                     17,152           46,218
+    PREA                        264            6,004
+    RDMAC8                      512              512
+    TMOD                        267            1,025
+    WRGB                      2,048           16,363
+    WRMAC8                      512            3,193
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48          259           12,432
+    MAC8                          2       16,893           33,786
+    以每条 nCCD=2 为参考预算：17,152 × 2 = 34,304；实际归属 46,218；差额 11,914。
+  Backend 合计（等效周期）：PIM=93,686.000 + PNM=0.000 + CXL=0.000 = 93,686.000。
+
+SV [attention.sv]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              43,520
+  WRGB：写入输入 GB                                      30,563
+  WRMAC8：初始化累加器，对应 WR_BIAS                             200
+  RDMAC8：读取结果                                           32
+  ACT / PRE                                         16,659
+  TMOD / CAS 等控制命令                                   3,152
+  PIM 合计                                            94,126
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                      259           11,846
+    ACT8-2                      259              259
+    CASRDMAC8                    32              472
+    CASWRGB                      59            1,888
+    CASWRMAC8                     8              164
+    MAC8                     15,872           43,520
+    PREA                        259            4,554
+    RDMAC8                       32               32
+    TMOD                        140              628
+    WRGB                      3,872           30,563
+    WRMAC8                       32              200
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48          256           12,288
+    MAC8                          2       15,616           31,232
+    以每条 nCCD=2 为参考预算：15,872 × 2 = 31,744；实际归属 43,520；差额 11,776。
+  Backend 合计（等效周期）：PIM=94,126.000 + PNM=1,536.000 + CXL=0.000 = 95,662.000。
+
+O Projection [attention.o_projection]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              11,278
+  WRGB：写入输入 GB                                       4,047
+  WRMAC8：初始化累加器，对应 WR_BIAS                              25
+  RDMAC8：读取结果                                            4
+  ACT / PRE                                          4,079
+  TMOD / CAS 等控制命令                                     308
+  PIM 合计                                            19,741
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                       66            3,006
+    ACT8-2                       66               66
+    CASRDMAC8                     4               59
+    CASWRGB                       7              224
+    CASWRMAC8                     1                9
+    MAC8                      4,144           11,278
+    PREA                         66            1,007
+    RDMAC8                        4                4
+    TMOD                         16               16
+    WRGB                        512            4,047
+    WRMAC8                        4               25
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48           65            3,120
+    MAC8                          2        4,079            8,158
+    以每条 nCCD=2 为参考预算：4,144 × 2 = 8,288；实际归属 11,278；差额 2,990。
+  Backend 合计（等效周期）：PIM=19,741.000 + PNM=0.000 + CXL=16,883.831 = 36,624.831。
+
+Up/Gate Projection [ffn.up_gate_projection]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              90,454
+  WRGB：写入输入 GB                                      32,341
+  WRMAC8：初始化累加器，对应 WR_BIAS                             100
+  RDMAC8：读取结果                                           16
+  ACT / PRE                                         32,405
+  TMOD / CAS 等控制命令                                   2,411
+  PIM 合计                                           157,727
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                      531           23,892
+    ACT8-2                      531              531
+    CASRDMAC8                    16              236
+    CASWRGB                      61            1,952
+    CASWRMAC8                     4               37
+    MAC8                     33,152           90,454
+    PREA                        531            7,982
+    RDMAC8                       16               16
+    TMOD                        132              186
+    WRGB                      4,096           32,341
+    WRMAC8                       16              100
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48          525           25,200
+    MAC8                          2       32,627           65,254
+    以每条 nCCD=2 为参考预算：33,152 × 2 = 66,304；实际归属 90,454；差额 24,150。
+  Backend 合计（等效周期）：PIM=157,727.000 + PNM=0.000 + CXL=0.000 = 157,727.000。
+
+Down Projection [ffn.down_projection]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              39,680
+  WRGB：写入输入 GB                                      14,140
+  WRMAC8：初始化累加器，对应 WR_BIAS                              25
+  RDMAC8：读取结果                                            4
+  ACT / PRE                                         14,460
+  TMOD / CAS 等控制命令                                   1,063
+  PIM 合计                                            69,372
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                      234           10,748
+    ACT8-2                      234              234
+    CASRDMAC8                     4               59
+    CASWRGB                      28              896
+    CASWRMAC8                     1               11
+    MAC8                     14,504           39,680
+    PREA                        234            3,478
+    RDMAC8                        4                4
+    TMOD                         58               97
+    WRGB                      1,792           14,140
+    WRMAC8                        4               25
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48          232           11,136
+    MAC8                          2       14,272           28,544
+    以每条 nCCD=2 为参考预算：14,504 × 2 = 29,008；实际归属 39,680；差额 10,672。
+  Backend 合计（等效周期）：PIM=69,372.000 + PNM=0.000 + CXL=16,883.831 = 86,255.831。
+
+KV Update [aux.kv_update]
+  归到这些发射事件的时间间隔                         周期
+  ACT / PRE                                            809
+  TMOD / CAS 等控制命令                                     163
+  WR：DRAM 写入                                           431
+  PIM 合计                                             1,403
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT-1                        37              505
+    ACT-2                        36               36
+    CASWR                        12              117
+    PRE                          35              213
+    PREA                          1               55
+    TMOD                          3               46
+    WR                           48              431
+  Backend 合计（等效周期）：PIM=1,403.000 + PNM=0.000 + CXL=0.000 = 1,403.000。
+
+Score Transfer [aux.score_transfer]
+  归到这些发射事件的时间间隔                         周期
+  ACT / PRE                                         15,794
+  TMOD / CAS 等控制命令                                 219,926
+  RD：DRAM 读取                                         6,616
+  WR：DRAM 写入                                         6,216
+  PIM 合计                                           248,552
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT-1                       424           13,442
+    ACT-2                       424              424
+    CASRD                     3,582          110,013
+    CASWR                     3,608          109,817
+    PRE                         107              661
+    PREA                         40            1,267
+    RD                        3,904            6,616
+    TMOD                          4               96
+    WR                        3,904            6,216
+  Backend 合计（等效周期）：PIM=248,552.000 + PNM=0.000 + CXL=0.000 = 248,552.000。
+
+FFN Activation [aux.ffn_activation]
+  归到这些发射事件的时间间隔                         周期
+  ACT / PRE                                             67
+  AF8：阵列内 activation                                   116
+  RDAF8：读取 activation 结果                                 8
+  TMOD / CAS 等控制命令                                      20
+  PIM 合计                                               211
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                        1               34
+    ACT8-2                        1                1
+    AF8                           8              116
+    PREA                          1               32
+    RDAF8                         8                8
+    TMOD                          4               20
+  Backend 合计（等效周期）：PIM=211.000 + PNM=716.800 + CXL=0.000 = 927.800。
+
+Unattributed / Background / Tail [aux.unattributed]
+  归到这些发射事件的时间间隔                         周期
+  TMOD / CAS 等控制命令                                     118
+  REFab                                              3,876
+  STARTUP：首次发射前                                          1
+  TAIL：末次发射后                                            11
+  PIM 合计                                             4,006
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    CASRDAF8                      8              118
+    REFab                       114            3,876
+    STARTUP                       0                1
+    TAIL                          0               11
+  Backend 合计（等效周期）：PIM=4,006.000 + PNM=0.000 + CXL=0.000 = 4,006.000。
+
+全部 PIM 事件间隔合计：713,214；整条 trace：713,214；差额：0 cycles。
+
+对账差额（ns）：{"block": 0.0, "cxl": 3.637978807091713e-12, "pim": 0.0, "pnm": 0.0}
+Source revisions/provenance 与输入 SHA256 见 run_manifest.json。
+SYNC/control 的独立完成时间 unavailable；其共享等待可能包含在 issued gaps 中。
+
+
+==============================================================================
+baseline/async-single
+==============================================================================
+Llama2-70B FP8 SA4x32; TP2; batch4; window32768; active30976
+LPDDR4 x16 x32 channels; prefetch16; 32 B/burst; nBL8; nCCD2; 625 ps/clock.
+Profile: async-single; Flash=False; pipelined Softmax=False; channel concurrency=False; EWMUL_PNM=ON.
+PIM=703,088 cycles (439.430000 us); PNM=103.980000 us; CXL=26.380986 us; block=569.790986 us.
+PIM totals simulated; PNM/CXL/Softmax exposure retain the reference analytical formulas.
+Two slots means 2 x 2 KiB/channel (4 KiB total). Extra GB area/power is uncalibrated; no energy claim.
+Accounting: global consecutive host phases retire in order at their last all-channel completion.
+States show one reference channel; other-channel/host waits are explicit. Issued counts may overlap; do not sum command spans as latency.
+Legacy kernel estimates remain in the reference report; this report uses completion-aware observer events.
+Residual EWADD arithmetic remains unmodeled; its zero ledger entry is not a hardware latency prediction.
+
+Kernel                              PIM clocks      PNM(us)      CXL(us)       Total(us)
+Attention RMSNorm                            0     0.450000     0.000000       0.450000
+Q Projection                            19,550     0.064000     0.000000      12.282750
+K/V Projection                           4,703     0.112000     0.000000       3.051375
+QK                                      95,029     0.000000     0.000000      59.393125
+SV                                      90,072     0.960000     0.000000      57.255000
+O Projection                            19,121     0.000000    10.552394      22.503019
+FFN RMSNorm                                  0     0.450000     0.000000       0.450000
+Up/Gate Projection                     154,130     0.000000     0.000000      96.331250
+Down Projection                         67,439     0.000000    10.552394      52.701769
+RoPE Q                                       0     3.136000     0.000000       3.136000
+RoPE K                                       0     0.392000     0.000000       0.392000
+KV Update                                2,561     0.000000     0.000000       1.600625
+Softmax                                      0    97.968000     0.000000      97.968000
+FlashAttention Merge                         0     0.000000     0.000000       0.000000
+Score Transfer                         250,140     0.000000     0.000000     156.337500
+FFN Activation                             329     0.448000     0.000000       0.653625
+Attention Residual                           0     0.000000     0.000000       0.000000
+FFN Residual                                 0     0.000000     0.000000       0.000000
+PP Handoff                                   0     0.000000     5.276197       5.276197
+SYNC / Control                              13     0.000000     0.000000       0.008125
+Unattributed / Background / Tail             1     0.000000     0.000000       0.000625
+
+Attention RMSNorm
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Q Projection
+  PIM exclusive wall cycles: 19,550
+    ACT8-1                                   67 cycles
+    ACT8-2                                   67 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                   7 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                            64 cycles
+    MAC8                                  4,144 cycles
+    MAC_nCCD_or_shared_timing             7,209 cycles
+    PREA                                     63 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                    512 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          89 cycles
+    other_channel_or_host_wait                3 cycles
+    refresh                                 164 cycles
+    row_timing                            3,556 cycles
+    wait_GB_ready                         3,560 cycles
+    issued ACT8-1                            67 events
+    issued ACT8-2                            67 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            7 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           4,144 events
+    issued PREA                              63 events
+    issued RDMAC8                             4 events
+    issued TMOD                               3 events
+    issued WRGB                             512 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=4,144 x 2 = 8,288; WRGB=512 x 8 = 4,096 clocks
+  Observer endpoints: accept=0, first_issue=1, last_issue=19543, complete=19551
+
+K/V Projection
+  PIM exclusive wall cycles: 4,703
+    ACT8-1                                   16 cycles
+    ACT8-2                                   16 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                   1 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                            16 cycles
+    MAC8                                  1,036 cycles
+    MAC_nCCD_or_shared_timing             1,772 cycles
+    PREA                                     16 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                    128 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    row_timing                              682 cycles
+    wait_GB_ready                           914 cycles
+    issued ACT8-1                            16 events
+    issued ACT8-2                            16 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            1 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           1,036 events
+    issued PREA                              16 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                             128 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=1,036 x 2 = 2,072; WRGB=128 x 8 = 1,024 clocks
+  Observer endpoints: accept=19551, first_issue=19552, last_issue=24246, complete=24254
+
+QK
+  PIM exclusive wall cycles: 95,029
+    ACT8-1                                  262 cycles
+    ACT8-2                                  262 cycles
+    CASRDMAC8                               511 cycles
+    CASWRMAC8                               127 cycles
+    GB_completion                         1,016 cycles
+    MAC8                                 17,018 cycles
+    MAC_nCCD_or_shared_timing            28,910 cycles
+    PREA                                    247 cycles
+    PU_mode_setup                         4,060 cycles
+    RDMAC8                                  511 cycles
+    WRGB                                  2,032 cycles
+    WRMAC8                                  508 cycles
+    external_timing                      11,285 cycles
+    other_channel_or_host_wait            1,222 cycles
+    refresh                                 802 cycles
+    row_timing                           12,976 cycles
+    wait_GB_ready                        13,280 cycles
+    issued ACT8-1                           265 events
+    issued ACT8-2                           265 events
+    issued CASRDMAC8                        512 events
+    issued CASWRMAC8                        128 events
+    issued MAC8                          17,152 events
+    issued PREA                             249 events
+    issued RDMAC8                           512 events
+    issued TMOD                             256 events
+    issued WRGB                           2,048 events
+    issued WRMAC8                           512 events
+  II-weighted work budgets (not elapsed latency): MAC8=17,152 x 2 = 34,304; WRGB=2,048 x 8 = 16,384 clocks
+  Observer endpoints: accept=24382, first_issue=24383, last_issue=377034, complete=377042
+
+SV
+  PIM exclusive wall cycles: 90,072
+    ACT8-1                                  255 cycles
+    ACT8-2                                  255 cycles
+    CASRDMAC8                                32 cycles
+    CASWRGB                                  56 cycles
+    CASWRMAC8                                 8 cycles
+    GB_completion                           512 cycles
+    MAC8                                 15,872 cycles
+    MAC_nCCD_or_shared_timing            27,574 cycles
+    PREA                                    243 cycles
+    PU_mode_setup                           256 cycles
+    RDMAC8                                   32 cycles
+    WRGB                                  3,872 cycles
+    WRMAC8                                   32 cycles
+    external_timing                         584 cycles
+    other_channel_or_host_wait               32 cycles
+    refresh                                 573 cycles
+    row_timing                           13,126 cycles
+    wait_GB_ready                        26,758 cycles
+    issued ACT8-1                           255 events
+    issued ACT8-2                           255 events
+    issued CASRDMAC8                         32 events
+    issued CASWRGB                           56 events
+    issued CASWRMAC8                          8 events
+    issued MAC8                          15,872 events
+    issued PREA                             243 events
+    issued RDMAC8                            32 events
+    issued TMOD                              20 events
+    issued WRGB                           3,872 events
+    issued WRMAC8                            32 events
+  II-weighted work budgets (not elapsed latency): MAC8=15,872 x 2 = 31,744; WRGB=3,872 x 8 = 30,976 clocks
+  Observer endpoints: accept=113225, first_issue=113226, last_issue=462056, complete=462064
+
+O Projection
+  PIM exclusive wall cycles: 19,121
+    ACT8-1                                   64 cycles
+    ACT8-2                                   64 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                   7 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                            64 cycles
+    MAC8                                  4,144 cycles
+    MAC_nCCD_or_shared_timing             7,088 cycles
+    PREA                                     63 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                    512 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    refresh                                  40 cycles
+    row_timing                            3,440 cycles
+    wait_GB_ready                         3,529 cycles
+    issued ACT8-1                            64 events
+    issued ACT8-2                            64 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            7 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           4,144 events
+    issued PREA                              63 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                             512 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=4,144 x 2 = 8,288; WRGB=512 x 8 = 4,096 clocks
+  Observer endpoints: accept=462064, first_issue=462065, last_issue=481177, complete=481185
+
+FFN RMSNorm
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Up/Gate Projection
+  PIM exclusive wall cycles: 154,130
+    ACT8-1                                  528 cycles
+    ACT8-2                                  528 cycles
+    CASRDMAC8                                16 cycles
+    CASWRGB                                  60 cycles
+    CASWRMAC8                                 4 cycles
+    GB_completion                           512 cycles
+    MAC8                                 33,152 cycles
+    MAC_nCCD_or_shared_timing            57,291 cycles
+    PREA                                    507 cycles
+    PU_mode_setup                           128 cycles
+    RDMAC8                                   16 cycles
+    WRGB                                  4,096 cycles
+    WRMAC8                                   16 cycles
+    external_timing                         228 cycles
+    other_channel_or_host_wait               17 cycles
+    refresh                               1,190 cycles
+    row_timing                           27,641 cycles
+    wait_GB_ready                        28,200 cycles
+    issued ACT8-1                           528 events
+    issued ACT8-2                           528 events
+    issued CASRDMAC8                         16 events
+    issued CASWRGB                           60 events
+    issued CASWRMAC8                          4 events
+    issued MAC8                          33,152 events
+    issued PREA                             507 events
+    issued RDMAC8                            16 events
+    issued TMOD                               8 events
+    issued WRGB                           4,096 events
+    issued WRMAC8                            16 events
+  II-weighted work budgets (not elapsed latency): MAC8=33,152 x 2 = 66,304; WRGB=4,096 x 8 = 32,768 clocks
+  Observer endpoints: accept=481186, first_issue=481187, last_issue=635307, complete=635315
+
+Down Projection
+  PIM exclusive wall cycles: 67,439
+    ACT8-1                                  231 cycles
+    ACT8-2                                  230 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                  27 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                           224 cycles
+    MAC8                                 14,504 cycles
+    MAC_nCCD_or_shared_timing            25,029 cycles
+    PREA                                    221 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                  1,792 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    refresh                                 588 cycles
+    row_timing                           12,167 cycles
+    wait_GB_ready                        12,320 cycles
+    issued ACT8-1                           231 events
+    issued ACT8-2                           230 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                           27 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                          14,504 events
+    issued PREA                             221 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                           1,792 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=14,504 x 2 = 29,008; WRGB=1,792 x 8 = 14,336 clocks
+  Observer endpoints: accept=635646, first_issue=635647, last_issue=703077, complete=703085
+
+RoPE Q
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+RoPE K
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+KV Update
+  PIM exclusive wall cycles: 2,561
+    other_channel_or_host_wait            1,501 cycles
+    other_phase_or_channel_wait           1,060 cycles
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Softmax
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+FlashAttention Merge
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Score Transfer
+  PIM exclusive wall cycles: 250,140
+    ACT-1                                   448 cycles
+    ACT-2                                   448 cycles
+    CASRD                                 3,539 cycles
+    CASWR                                 3,607 cycles
+    PRE                                     128 cycles
+    RD                                    3,904 cycles
+    WR                                    3,904 cycles
+    external_timing                     182,106 cycles
+    other_channel_or_host_wait           50,101 cycles
+    other_phase_or_channel_wait               8 cycles
+    refresh                               1,947 cycles
+    issued ACT-1                            448 events
+    issued ACT-2                            448 events
+    issued CASRD                          3,539 events
+    issued CASWR                          3,607 events
+    issued PRE                              128 events
+    issued RD                             3,904 events
+    issued TMOD                               4 events
+    issued WR                             3,904 events
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=50622, first_issue=50623, last_issue=439497, complete=439525
+
+FFN Activation
+  PIM exclusive wall cycles: 329
+    ACT8-1                                    1 cycles
+    ACT8-2                                    1 cycles
+    AF8                                       8 cycles
+    CASRDAF8                                  8 cycles
+    PREA                                      1 cycles
+    RDAF8                                     8 cycles
+    external_timing                         294 cycles
+    other_channel_or_host_wait                8 cycles
+    issued ACT8-1                             1 events
+    issued ACT8-2                             1 events
+    issued AF8                                8 events
+    issued CASRDAF8                           8 events
+    issued PREA                               1 events
+    issued RDAF8                              8 events
+    issued TMOD                               4 events
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=635315, first_issue=635316, last_issue=635636, complete=635644
+
+Attention Residual
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+FFN Residual
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+PP Handoff
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+SYNC / Control
+  PIM exclusive wall cycles: 13
+    fence                                     2 cycles
+    other_channel_or_host_wait               11 cycles
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=81854, first_issue=None, last_issue=None, complete=703088
+
+Unattributed / Background / Tail
+  PIM exclusive wall cycles: 1
+    idle_or_tail                              1 cycles
+    issued PREA                             103 events
+    issued REFab                            112 events
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=6261, last_issue=700072, complete=None
+
+All-channel lifecycle/resource validation: PASS
+Reference channel: 0
+Reference-channel simultaneous PU-step / WRGB-issue clocks: 0
+Reconciliation residuals: {'pim': 0.0, 'block': 0.0}
+
+
+==============================================================================
+baseline/async-serialized
+==============================================================================
+Llama2-70B FP8 SA4x32; TP2; batch4; window32768; active30976
+LPDDR4 x16 x32 channels; prefetch16; 32 B/burst; nBL8; nCCD2; 625 ps/clock.
+Profile: async-serialized; Flash=False; pipelined Softmax=False; channel concurrency=False; EWMUL_PNM=ON.
+PIM=703,088 cycles (439.430000 us); PNM=103.980000 us; CXL=26.380986 us; block=569.790986 us.
+PIM totals simulated; PNM/CXL/Softmax exposure retain the reference analytical formulas.
+Two slots means 2 x 2 KiB/channel (4 KiB total). Extra GB area/power is uncalibrated; no energy claim.
+Accounting: global consecutive host phases retire in order at their last all-channel completion.
+States show one reference channel; other-channel/host waits are explicit. Issued counts may overlap; do not sum command spans as latency.
+Legacy kernel estimates remain in the reference report; this report uses completion-aware observer events.
+Residual EWADD arithmetic remains unmodeled; its zero ledger entry is not a hardware latency prediction.
+
+Kernel                              PIM clocks      PNM(us)      CXL(us)       Total(us)
+Attention RMSNorm                            0     0.450000     0.000000       0.450000
+Q Projection                            19,550     0.064000     0.000000      12.282750
+K/V Projection                           4,703     0.112000     0.000000       3.051375
+QK                                      95,029     0.000000     0.000000      59.393125
+SV                                      90,072     0.960000     0.000000      57.255000
+O Projection                            19,121     0.000000    10.552394      22.503019
+FFN RMSNorm                                  0     0.450000     0.000000       0.450000
+Up/Gate Projection                     154,130     0.000000     0.000000      96.331250
+Down Projection                         67,439     0.000000    10.552394      52.701769
+RoPE Q                                       0     3.136000     0.000000       3.136000
+RoPE K                                       0     0.392000     0.000000       0.392000
+KV Update                                2,561     0.000000     0.000000       1.600625
+Softmax                                      0    97.968000     0.000000      97.968000
+FlashAttention Merge                         0     0.000000     0.000000       0.000000
+Score Transfer                         250,140     0.000000     0.000000     156.337500
+FFN Activation                             329     0.448000     0.000000       0.653625
+Attention Residual                           0     0.000000     0.000000       0.000000
+FFN Residual                                 0     0.000000     0.000000       0.000000
+PP Handoff                                   0     0.000000     5.276197       5.276197
+SYNC / Control                              13     0.000000     0.000000       0.008125
+Unattributed / Background / Tail             1     0.000000     0.000000       0.000625
+
+Attention RMSNorm
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Q Projection
+  PIM exclusive wall cycles: 19,550
+    ACT8-1                                   67 cycles
+    ACT8-2                                   67 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                   7 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                            64 cycles
+    MAC8                                  4,144 cycles
+    MAC_nCCD_or_shared_timing             7,209 cycles
+    PREA                                     63 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                    512 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          89 cycles
+    other_channel_or_host_wait                3 cycles
+    refresh                                 164 cycles
+    row_timing                            3,556 cycles
+    wait_GB_ready                         3,560 cycles
+    issued ACT8-1                            67 events
+    issued ACT8-2                            67 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            7 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           4,144 events
+    issued PREA                              63 events
+    issued RDMAC8                             4 events
+    issued TMOD                               3 events
+    issued WRGB                             512 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=4,144 x 2 = 8,288; WRGB=512 x 8 = 4,096 clocks
+  Observer endpoints: accept=0, first_issue=1, last_issue=19543, complete=19551
+
+K/V Projection
+  PIM exclusive wall cycles: 4,703
+    ACT8-1                                   16 cycles
+    ACT8-2                                   16 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                   1 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                            16 cycles
+    MAC8                                  1,036 cycles
+    MAC_nCCD_or_shared_timing             1,772 cycles
+    PREA                                     16 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                    128 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    row_timing                              682 cycles
+    wait_GB_ready                           914 cycles
+    issued ACT8-1                            16 events
+    issued ACT8-2                            16 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            1 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           1,036 events
+    issued PREA                              16 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                             128 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=1,036 x 2 = 2,072; WRGB=128 x 8 = 1,024 clocks
+  Observer endpoints: accept=19551, first_issue=19552, last_issue=24246, complete=24254
+
+QK
+  PIM exclusive wall cycles: 95,029
+    ACT8-1                                  262 cycles
+    ACT8-2                                  262 cycles
+    CASRDMAC8                               511 cycles
+    CASWRMAC8                               127 cycles
+    GB_completion                         1,016 cycles
+    MAC8                                 17,018 cycles
+    MAC_nCCD_or_shared_timing            28,910 cycles
+    PREA                                    247 cycles
+    PU_mode_setup                         4,060 cycles
+    RDMAC8                                  511 cycles
+    WRGB                                  2,032 cycles
+    WRMAC8                                  508 cycles
+    external_timing                      11,285 cycles
+    other_channel_or_host_wait            1,222 cycles
+    refresh                                 802 cycles
+    row_timing                           12,976 cycles
+    wait_GB_ready                        13,280 cycles
+    issued ACT8-1                           265 events
+    issued ACT8-2                           265 events
+    issued CASRDMAC8                        512 events
+    issued CASWRMAC8                        128 events
+    issued MAC8                          17,152 events
+    issued PREA                             249 events
+    issued RDMAC8                           512 events
+    issued TMOD                             256 events
+    issued WRGB                           2,048 events
+    issued WRMAC8                           512 events
+  II-weighted work budgets (not elapsed latency): MAC8=17,152 x 2 = 34,304; WRGB=2,048 x 8 = 16,384 clocks
+  Observer endpoints: accept=24382, first_issue=24383, last_issue=377034, complete=377042
+
+SV
+  PIM exclusive wall cycles: 90,072
+    ACT8-1                                  255 cycles
+    ACT8-2                                  255 cycles
+    CASRDMAC8                                32 cycles
+    CASWRGB                                  56 cycles
+    CASWRMAC8                                 8 cycles
+    GB_completion                           512 cycles
+    MAC8                                 15,872 cycles
+    MAC_nCCD_or_shared_timing            27,574 cycles
+    PREA                                    243 cycles
+    PU_mode_setup                           256 cycles
+    RDMAC8                                   32 cycles
+    WRGB                                  3,872 cycles
+    WRMAC8                                   32 cycles
+    external_timing                         584 cycles
+    other_channel_or_host_wait               32 cycles
+    refresh                                 573 cycles
+    row_timing                           13,126 cycles
+    wait_GB_ready                        26,758 cycles
+    issued ACT8-1                           255 events
+    issued ACT8-2                           255 events
+    issued CASRDMAC8                         32 events
+    issued CASWRGB                           56 events
+    issued CASWRMAC8                          8 events
+    issued MAC8                          15,872 events
+    issued PREA                             243 events
+    issued RDMAC8                            32 events
+    issued TMOD                              20 events
+    issued WRGB                           3,872 events
+    issued WRMAC8                            32 events
+  II-weighted work budgets (not elapsed latency): MAC8=15,872 x 2 = 31,744; WRGB=3,872 x 8 = 30,976 clocks
+  Observer endpoints: accept=113225, first_issue=113226, last_issue=462056, complete=462064
+
+O Projection
+  PIM exclusive wall cycles: 19,121
+    ACT8-1                                   64 cycles
+    ACT8-2                                   64 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                   7 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                            64 cycles
+    MAC8                                  4,144 cycles
+    MAC_nCCD_or_shared_timing             7,088 cycles
+    PREA                                     63 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                    512 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    refresh                                  40 cycles
+    row_timing                            3,440 cycles
+    wait_GB_ready                         3,529 cycles
+    issued ACT8-1                            64 events
+    issued ACT8-2                            64 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            7 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           4,144 events
+    issued PREA                              63 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                             512 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=4,144 x 2 = 8,288; WRGB=512 x 8 = 4,096 clocks
+  Observer endpoints: accept=462064, first_issue=462065, last_issue=481177, complete=481185
+
+FFN RMSNorm
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Up/Gate Projection
+  PIM exclusive wall cycles: 154,130
+    ACT8-1                                  528 cycles
+    ACT8-2                                  528 cycles
+    CASRDMAC8                                16 cycles
+    CASWRGB                                  60 cycles
+    CASWRMAC8                                 4 cycles
+    GB_completion                           512 cycles
+    MAC8                                 33,152 cycles
+    MAC_nCCD_or_shared_timing            57,291 cycles
+    PREA                                    507 cycles
+    PU_mode_setup                           128 cycles
+    RDMAC8                                   16 cycles
+    WRGB                                  4,096 cycles
+    WRMAC8                                   16 cycles
+    external_timing                         228 cycles
+    other_channel_or_host_wait               17 cycles
+    refresh                               1,190 cycles
+    row_timing                           27,641 cycles
+    wait_GB_ready                        28,200 cycles
+    issued ACT8-1                           528 events
+    issued ACT8-2                           528 events
+    issued CASRDMAC8                         16 events
+    issued CASWRGB                           60 events
+    issued CASWRMAC8                          4 events
+    issued MAC8                          33,152 events
+    issued PREA                             507 events
+    issued RDMAC8                            16 events
+    issued TMOD                               8 events
+    issued WRGB                           4,096 events
+    issued WRMAC8                            16 events
+  II-weighted work budgets (not elapsed latency): MAC8=33,152 x 2 = 66,304; WRGB=4,096 x 8 = 32,768 clocks
+  Observer endpoints: accept=481186, first_issue=481187, last_issue=635307, complete=635315
+
+Down Projection
+  PIM exclusive wall cycles: 67,439
+    ACT8-1                                  231 cycles
+    ACT8-2                                  230 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                  27 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                           224 cycles
+    MAC8                                 14,504 cycles
+    MAC_nCCD_or_shared_timing            25,029 cycles
+    PREA                                    221 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                  1,792 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    refresh                                 588 cycles
+    row_timing                           12,167 cycles
+    wait_GB_ready                        12,320 cycles
+    issued ACT8-1                           231 events
+    issued ACT8-2                           230 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                           27 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                          14,504 events
+    issued PREA                             221 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                           1,792 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=14,504 x 2 = 29,008; WRGB=1,792 x 8 = 14,336 clocks
+  Observer endpoints: accept=635646, first_issue=635647, last_issue=703077, complete=703085
+
+RoPE Q
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+RoPE K
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+KV Update
+  PIM exclusive wall cycles: 2,561
+    other_channel_or_host_wait            1,501 cycles
+    other_phase_or_channel_wait           1,060 cycles
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Softmax
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+FlashAttention Merge
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Score Transfer
+  PIM exclusive wall cycles: 250,140
+    ACT-1                                   448 cycles
+    ACT-2                                   448 cycles
+    CASRD                                 3,539 cycles
+    CASWR                                 3,607 cycles
+    PRE                                     128 cycles
+    RD                                    3,904 cycles
+    WR                                    3,904 cycles
+    external_timing                     182,106 cycles
+    other_channel_or_host_wait           50,101 cycles
+    other_phase_or_channel_wait               8 cycles
+    refresh                               1,947 cycles
+    issued ACT-1                            448 events
+    issued ACT-2                            448 events
+    issued CASRD                          3,539 events
+    issued CASWR                          3,607 events
+    issued PRE                              128 events
+    issued RD                             3,904 events
+    issued TMOD                               4 events
+    issued WR                             3,904 events
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=50622, first_issue=50623, last_issue=439497, complete=439525
+
+FFN Activation
+  PIM exclusive wall cycles: 329
+    ACT8-1                                    1 cycles
+    ACT8-2                                    1 cycles
+    AF8                                       8 cycles
+    CASRDAF8                                  8 cycles
+    PREA                                      1 cycles
+    RDAF8                                     8 cycles
+    external_timing                         294 cycles
+    other_channel_or_host_wait                8 cycles
+    issued ACT8-1                             1 events
+    issued ACT8-2                             1 events
+    issued AF8                                8 events
+    issued CASRDAF8                           8 events
+    issued PREA                               1 events
+    issued RDAF8                              8 events
+    issued TMOD                               4 events
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=635315, first_issue=635316, last_issue=635636, complete=635644
+
+Attention Residual
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+FFN Residual
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+PP Handoff
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+SYNC / Control
+  PIM exclusive wall cycles: 13
+    fence                                     2 cycles
+    other_channel_or_host_wait               11 cycles
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=81854, first_issue=None, last_issue=None, complete=703088
+
+Unattributed / Background / Tail
+  PIM exclusive wall cycles: 1
+    idle_or_tail                              1 cycles
+    issued PREA                             103 events
+    issued REFab                            112 events
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=6261, last_issue=700072, complete=None
+
+All-channel lifecycle/resource validation: PASS
+Reference channel: 0
+Reference-channel simultaneous PU-step / WRGB-issue clocks: 0
+Reconciliation residuals: {'pim': 0.0, 'block': 0.0}
+
+
+==============================================================================
+baseline/double
+==============================================================================
+Llama2-70B FP8 SA4x32; TP2; batch4; window32768; active30976
+LPDDR4 x16 x32 channels; prefetch16; 32 B/burst; nBL8; nCCD2; 625 ps/clock.
+Profile: double; Flash=False; pipelined Softmax=False; channel concurrency=False; EWMUL_PNM=ON.
+PIM=624,183 cycles (390.114375 us); PNM=103.980000 us; CXL=26.380986 us; block=520.475361 us.
+PIM totals simulated; PNM/CXL/Softmax exposure retain the reference analytical formulas.
+Two slots means 2 x 2 KiB/channel (4 KiB total). Extra GB area/power is uncalibrated; no energy claim.
+Accounting: global consecutive host phases retire in order at their last all-channel completion.
+States show one reference channel; other-channel/host waits are explicit. Issued counts may overlap; do not sum command spans as latency.
+Legacy kernel estimates remain in the reference report; this report uses completion-aware observer events.
+Residual EWADD arithmetic remains unmodeled; its zero ledger entry is not a hardware latency prediction.
+
+Kernel                              PIM clocks      PNM(us)      CXL(us)       Total(us)
+Attention RMSNorm                            0     0.450000     0.000000       0.450000
+Q Projection                            15,607     0.064000     0.000000       9.818375
+K/V Projection                           4,549     0.112000     0.000000       2.955125
+QK                                      95,091     0.000000     0.000000      59.431875
+SV                                      63,247     0.960000     0.000000      40.489375
+O Projection                            15,598     0.000000    10.552394      20.301144
+FFN RMSNorm                                  0     0.450000     0.000000       0.450000
+Up/Gate Projection                     123,941     0.000000     0.000000      77.463125
+Down Projection                         53,331     0.000000    10.552394      43.884269
+RoPE Q                                       0     3.136000     0.000000       3.136000
+RoPE K                                       0     0.392000     0.000000       0.392000
+KV Update                                2,424     0.000000     0.000000       1.515000
+Softmax                                      0    97.968000     0.000000      97.968000
+FlashAttention Merge                         0     0.000000     0.000000       0.000000
+Score Transfer                         250,052     0.000000     0.000000     156.282500
+FFN Activation                             329     0.448000     0.000000       0.653625
+Attention Residual                           0     0.000000     0.000000       0.000000
+FFN Residual                                 0     0.000000     0.000000       0.000000
+PP Handoff                                   0     0.000000     5.276197       5.276197
+SYNC / Control                              13     0.000000     0.000000       0.008125
+Unattributed / Background / Tail             1     0.000000     0.000000       0.000625
+
+Attention RMSNorm
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Q Projection
+  PIM exclusive wall cycles: 15,607
+    ACT8-1                                   66 cycles
+    ACT8-2                                   66 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                             8 cycles
+    MAC8                                  4,144 cycles
+    MAC_nCCD_or_shared_timing             7,181 cycles
+    PREA                                     63 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                     64 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          89 cycles
+    other_channel_or_host_wait                3 cycles
+    refresh                                  91 cycles
+    row_timing                            3,346 cycles
+    wait_GB_ready                           441 cycles
+    issued ACT8-1                            66 events
+    issued ACT8-2                            66 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            8 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           4,144 events
+    issued PREA                              63 events
+    issued RDMAC8                             4 events
+    issued TMOD                               3 events
+    issued WRGB                             512 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=4,144 x 2 = 8,288; WRGB=512 x 8 = 4,096 clocks
+  Observer endpoints: accept=0, first_issue=1, last_issue=15600, complete=15608
+
+K/V Projection
+  PIM exclusive wall cycles: 4,549
+    ACT8-1                                   17 cycles
+    ACT8-2                                   17 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                             8 cycles
+    MAC8                                  1,036 cycles
+    MAC_nCCD_or_shared_timing             1,819 cycles
+    PREA                                     16 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                     64 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    refresh                                  45 cycles
+    row_timing                              980 cycles
+    wait_GB_ready                           441 cycles
+    issued ACT8-1                            17 events
+    issued ACT8-2                            17 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            1 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           1,036 events
+    issued PREA                              16 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                             128 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=1,036 x 2 = 2,072; WRGB=128 x 8 = 1,024 clocks
+  Observer endpoints: accept=15608, first_issue=15609, last_issue=20149, complete=20157
+
+QK
+  PIM exclusive wall cycles: 95,091
+    ACT8-1                                  261 cycles
+    ACT8-2                                  261 cycles
+    CASRDMAC8                               511 cycles
+    CASWRMAC8                               130 cycles
+    GB_completion                         1,016 cycles
+    MAC8                                 17,018 cycles
+    MAC_nCCD_or_shared_timing            28,862 cycles
+    PREA                                    248 cycles
+    PU_mode_setup                         4,064 cycles
+    RDMAC8                                  511 cycles
+    WRGB                                  2,032 cycles
+    WRMAC8                                  508 cycles
+    external_timing                      11,291 cycles
+    other_channel_or_host_wait            1,222 cycles
+    refresh                                 795 cycles
+    row_timing                           13,055 cycles
+    wait_GB_ready                        13,306 cycles
+    issued ACT8-1                           263 events
+    issued ACT8-2                           263 events
+    issued CASRDMAC8                        512 events
+    issued CASWRMAC8                        131 events
+    issued MAC8                          17,152 events
+    issued PREA                             250 events
+    issued RDMAC8                           512 events
+    issued TMOD                             256 events
+    issued WRGB                           2,048 events
+    issued WRMAC8                           512 events
+  II-weighted work budgets (not elapsed latency): MAC8=17,152 x 2 = 34,304; WRGB=2,048 x 8 = 16,384 clocks
+  Observer endpoints: accept=20285, first_issue=20286, last_issue=352744, complete=352752
+
+SV
+  PIM exclusive wall cycles: 63,247
+    ACT8-1                                  257 cycles
+    ACT8-2                                  257 cycles
+    CASRDMAC8                                32 cycles
+    CASWRMAC8                                 8 cycles
+    GB_completion                            64 cycles
+    MAC8                                 15,872 cycles
+    MAC_nCCD_or_shared_timing            27,688 cycles
+    PREA                                    248 cycles
+    PU_mode_setup                           256 cycles
+    RDMAC8                                   32 cycles
+    WRGB                                    512 cycles
+    WRMAC8                                   32 cycles
+    external_timing                         584 cycles
+    other_channel_or_host_wait               32 cycles
+    refresh                                 438 cycles
+    row_timing                           13,407 cycles
+    wait_GB_ready                         3,528 cycles
+    issued ACT8-1                           257 events
+    issued ACT8-2                           257 events
+    issued CASRDMAC8                         32 events
+    issued CASWRGB                           56 events
+    issued CASWRMAC8                          8 events
+    issued MAC8                          15,872 events
+    issued PREA                             248 events
+    issued RDMAC8                            32 events
+    issued TMOD                              20 events
+    issued WRGB                           3,872 events
+    issued WRMAC8                            32 events
+  II-weighted work budgets (not elapsed latency): MAC8=15,872 x 2 = 31,744; WRGB=3,872 x 8 = 30,976 clocks
+  Observer endpoints: accept=109017, first_issue=109018, last_issue=430971, complete=430979
+
+O Projection
+  PIM exclusive wall cycles: 15,598
+    ACT8-1                                   66 cycles
+    ACT8-2                                   66 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                             8 cycles
+    MAC8                                  4,144 cycles
+    MAC_nCCD_or_shared_timing             7,138 cycles
+    PREA                                     63 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                     64 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    refresh                                 174 cycles
+    row_timing                            3,359 cycles
+    wait_GB_ready                           410 cycles
+    issued ACT8-1                            66 events
+    issued ACT8-2                            66 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            7 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           4,144 events
+    issued PREA                              63 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                             512 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=4,144 x 2 = 8,288; WRGB=512 x 8 = 4,096 clocks
+  Observer endpoints: accept=430979, first_issue=430980, last_issue=446569, complete=446577
+
+FFN RMSNorm
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Up/Gate Projection
+  PIM exclusive wall cycles: 123,941
+    ACT8-1                                  531 cycles
+    ACT8-2                                  531 cycles
+    CASRDMAC8                                16 cycles
+    CASWRMAC8                                 4 cycles
+    GB_completion                            32 cycles
+    MAC8                                 33,152 cycles
+    MAC_nCCD_or_shared_timing            57,402 cycles
+    PREA                                    511 cycles
+    PU_mode_setup                           128 cycles
+    RDMAC8                                   16 cycles
+    WRGB                                    256 cycles
+    WRMAC8                                   16 cycles
+    external_timing                         228 cycles
+    other_channel_or_host_wait               17 cycles
+    refresh                               1,140 cycles
+    row_timing                           28,197 cycles
+    wait_GB_ready                         1,764 cycles
+    issued ACT8-1                           531 events
+    issued ACT8-2                           531 events
+    issued CASRDMAC8                         16 events
+    issued CASWRGB                           60 events
+    issued CASWRMAC8                          4 events
+    issued MAC8                          33,152 events
+    issued PREA                             511 events
+    issued RDMAC8                            16 events
+    issued TMOD                               8 events
+    issued WRGB                           4,096 events
+    issued WRMAC8                            16 events
+  II-weighted work budgets (not elapsed latency): MAC8=33,152 x 2 = 66,304; WRGB=4,096 x 8 = 32,768 clocks
+  Observer endpoints: accept=446578, first_issue=446579, last_issue=570510, complete=570518
+
+Down Projection
+  PIM exclusive wall cycles: 53,331
+    ACT8-1                                  230 cycles
+    ACT8-2                                  230 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                             8 cycles
+    MAC8                                 14,504 cycles
+    MAC_nCCD_or_shared_timing            25,041 cycles
+    PREA                                    223 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                     64 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    refresh                                 397 cycles
+    row_timing                           12,087 cycles
+    wait_GB_ready                           441 cycles
+    issued ACT8-1                           230 events
+    issued ACT8-2                           230 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                           27 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                          14,504 events
+    issued PREA                             223 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                           1,792 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=14,504 x 2 = 29,008; WRGB=1,792 x 8 = 14,336 clocks
+  Observer endpoints: accept=570849, first_issue=570850, last_issue=624172, complete=624180
+
+RoPE Q
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+RoPE K
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+KV Update
+  PIM exclusive wall cycles: 2,424
+    other_channel_or_host_wait            1,745 cycles
+    other_phase_or_channel_wait             679 cycles
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Softmax
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+FlashAttention Merge
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Score Transfer
+  PIM exclusive wall cycles: 250,052
+    ACT-1                                   440 cycles
+    ACT-2                                   440 cycles
+    CASRD                                 3,540 cycles
+    CASWR                                 3,601 cycles
+    PRE                                     124 cycles
+    RD                                    3,904 cycles
+    WR                                    3,904 cycles
+    external_timing                     182,036 cycles
+    other_channel_or_host_wait           50,176 cycles
+    other_phase_or_channel_wait               8 cycles
+    refresh                               1,879 cycles
+    issued ACT-1                            440 events
+    issued ACT-2                            440 events
+    issued CASRD                          3,540 events
+    issued CASWR                          3,601 events
+    issued PRE                              124 events
+    issued RD                             3,904 events
+    issued TMOD                               4 events
+    issued WR                             3,904 events
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=46502, first_issue=46503, last_issue=415207, complete=415235
+
+FFN Activation
+  PIM exclusive wall cycles: 329
+    ACT8-1                                    1 cycles
+    ACT8-2                                    1 cycles
+    AF8                                       8 cycles
+    CASRDAF8                                  8 cycles
+    PREA                                      1 cycles
+    RDAF8                                     8 cycles
+    external_timing                         294 cycles
+    other_channel_or_host_wait                8 cycles
+    issued ACT8-1                             1 events
+    issued ACT8-2                             1 events
+    issued AF8                                8 events
+    issued CASRDAF8                           8 events
+    issued PREA                               1 events
+    issued RDAF8                              8 events
+    issued TMOD                               4 events
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=570518, first_issue=570519, last_issue=570839, complete=570847
+
+Attention Residual
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+FFN Residual
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+PP Handoff
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+SYNC / Control
+  PIM exclusive wall cycles: 13
+    fence                                     2 cycles
+    other_channel_or_host_wait               11 cycles
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=77734, first_issue=None, last_issue=None, complete=624183
+
+Unattributed / Background / Tail
+  PIM exclusive wall cycles: 1
+    idle_or_tail                              1 cycles
+    issued PREA                              95 events
+    issued REFab                             99 events
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=6260, last_issue=618785, complete=None
+
+All-channel lifecycle/resource validation: PASS
+Reference channel: 0
+Reference-channel simultaneous PU-step / WRGB-issue clocks: 270
+Reconciliation residuals: {'pim': 0.0, 'block': 0.0}
+
+
+==============================================================================
+full/legacy
+==============================================================================
+Replayed legacy controller: exact full-run cycle match to reference.
+Llama2-70B legacy v0.0 cycle breakdown — LPDDR4 nCCD=2, TP=2, batch=4
+精度：FP8；PIM 阵列：4×32。
+DRAM interface: 32 channels × x16; device DQ=16; prefetch=16; transaction=32 B; nBL=8 clocks.
+Context window：32,768；实际 decode 长度：30,976。
+优化开关：EWMUL_PNM=True；FlashAttention=True（block=1024）；pipelined_softmax=True；channel_concurrency=True。
+范围：一个代表 rank 上一个 block 的 batch group；PP=16，未乘 80 层或 TP。
+参考周期：625 ps；下列周期均为该时钟的等效周期。
+整条 trace 的 PIM 实测周期：564,405。
+Legacy block 合计：411.070003 µs；等效周期 657,712.005。
+其中 PIM=352.753125 µs，PNM=31.935893 µs，CXL=26.380986 µs。
+每个输出 token 的摊销 block 时间：102.767501 µs（不是单请求端到端 token latency）。
+PIM 分项方法：legacy_tp_issued_gap_v1，参考 channel=15。
+PIM kernel 分项是估算归因，未观测 completion；PNM/CXL 是 legacy 公式。K/V、Up/Gate 保持融合。
+
+部分                                      PIM等效周期     PNM等效周期     CXL等效周期      合计(µs)    占block
+Attention RMSNorm                               0.000         720.000           0.000       0.450000      0.11%
+Q Projection                               19,640.000         102.400           0.000      12.339000      3.00%
+K/V Projection                              4,750.000         179.200           0.000       3.080750      0.75%
+QK                                        177,013.000           0.000           0.000     110.633125     26.91%
+SV                                        111,635.000       1,536.000           0.000      70.731875     17.21%
+O Projection                               19,515.000           0.000      16,883.831      22.749269      5.53%
+FFN RMSNorm                                     0.000         720.000           0.000       0.450000      0.11%
+Up/Gate Projection                        157,871.000           0.000           0.000      98.669375     24.00%
+Down Projection                            69,177.000           0.000      16,883.831      53.788019     13.08%
+RoPE Q                                          0.000       5,017.600           0.000       3.136000      0.76%
+RoPE K                                          0.000         627.200           0.000       0.392000      0.10%
+KV Update                                   1,403.000           0.000           0.000       0.876875      0.21%
+Softmax                                         0.000      41,454.228           0.000      25.908893      6.30%
+FlashAttention Merge                            0.000          24.000           0.000       0.015000      0.00%
+Score Transfer: 0；FlashAttention 未物化 score DRAM workspace，无对应读写命令。
+FFN Activation                                211.000         716.800           0.000       0.579875      0.14%
+Attention Residual: arithmetic 未建模；旧账本没有单独计时。
+FFN Residual: arithmetic 未建模；旧账本没有单独计时。
+PP Handoff                                      0.000           0.000       8,441.915       5.276197      1.28%
+Unattributed / Background / Tail            3,190.000           0.000           0.000       1.993750      0.49%
+
+逐 kernel 的 PIM / PNM / CXL 周期组成
+等效周期统一按 PIM 参考时钟换算；PNM formula cycles 使用其独立时钟。
+以下是已有总计的展开，不重复计时；未建模项不能解释为硬件耗时为零。
+
+Attention RMSNorm [attention.rmsnorm]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 900.000000 formula cycles × 0.5 ns = 450.000000 ns = 720.000000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：450.000000 ns = 720.000000 等效周期。
+
+Q Projection [attention.q_projection]
+  PIM: 19,640.000000 归属周期 × 0.625 ns = 12,275.000000 ns。
+  PNM: 128.000000 formula cycles × 0.5 ns = 64.000000 ns = 102.400000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：12,339.000000 ns = 19,742.400000 等效周期。
+
+K/V Projection [attention.kv_projection]
+  PIM: 4,750.000000 归属周期 × 0.625 ns = 2,968.750000 ns。
+  PNM: 224.000000 formula cycles × 0.5 ns = 112.000000 ns = 179.200000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：3,080.750000 ns = 4,929.200000 等效周期。
+
+QK [attention.qk]
+  PIM: 177,013.000000 归属周期 × 0.625 ns = 110,633.125000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：110,633.125000 ns = 177,013.000000 等效周期。
+
+SV [attention.sv]
+  PIM: 111,635.000000 归属周期 × 0.625 ns = 69,771.875000 ns。
+  PNM: 1,920.000000 formula cycles × 0.5 ns = 960.000000 ns = 1,536.000000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：70,731.875000 ns = 113,171.000000 等效周期。
+
+O Projection [attention.o_projection]
+  PIM: 19,515.000000 归属周期 × 0.625 ns = 12,196.875000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 10,552.394257 ns / 0.625 ns = 16,883.830811 等效周期（legacy 公式）。
+  Legacy 合计：22,749.269257 ns = 36,398.830811 等效周期。
+
+FFN RMSNorm [ffn.rmsnorm]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 900.000000 formula cycles × 0.5 ns = 450.000000 ns = 720.000000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：450.000000 ns = 720.000000 等效周期。
+
+Up/Gate Projection [ffn.up_gate_projection]
+  PIM: 157,871.000000 归属周期 × 0.625 ns = 98,669.375000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：98,669.375000 ns = 157,871.000000 等效周期。
+
+Down Projection [ffn.down_projection]
+  PIM: 69,177.000000 归属周期 × 0.625 ns = 43,235.625000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 10,552.394257 ns / 0.625 ns = 16,883.830811 等效周期（legacy 公式）。
+  Legacy 合计：53,788.019257 ns = 86,060.830811 等效周期。
+
+RoPE Q [aux.rope_q]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 6,272.000000 formula cycles × 0.5 ns = 3,136.000000 ns = 5,017.600000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：3,136.000000 ns = 5,017.600000 等效周期。
+
+RoPE K [aux.rope_k]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 784.000000 formula cycles × 0.5 ns = 392.000000 ns = 627.200000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：392.000000 ns = 627.200000 等效周期。
+
+KV Update [aux.kv_update]
+  PIM: 1,403.000000 归属周期 × 0.625 ns = 876.875000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：876.875000 ns = 1,403.000000 等效周期。
+
+Softmax [aux.softmax]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 51,817.785124 formula cycles × 0.5 ns = 25,908.892562 ns = 41,454.228099 等效周期。
+    完整 Softmax 工作：97,968.000000 ns；exposed：25,908.892562 ns；分析模型中的 overlap：72,059.107438 ns。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：25,908.892562 ns = 41,454.228099 等效周期。
+
+FlashAttention Merge [aux.flash_merge]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 30.000000 formula cycles × 0.5 ns = 15.000000 ns = 24.000000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：15.000000 ns = 24.000000 等效周期。
+
+Score Transfer [aux.score_transfer]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：0.000000 ns = 0.000000 等效周期。
+
+FFN Activation [aux.ffn_activation]
+  PIM: 211.000000 归属周期 × 0.625 ns = 131.875000 ns。
+  PNM: 896.000000 formula cycles × 0.5 ns = 448.000000 ns = 716.800000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：579.875000 ns = 927.800000 等效周期。
+
+Attention Residual [aux.attention_residual]
+  PIM: unmodeled；独立执行时间 unavailable。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：0.000000 ns = 0.000000 等效周期。
+
+FFN Residual [aux.ffn_residual]
+  PIM: unmodeled；独立执行时间 unavailable。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：0.000000 ns = 0.000000 等效周期。
+
+PP Handoff [aux.pp_handoff]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 5,276.197128 ns / 0.625 ns = 8,441.915405 等效周期（legacy 公式）。
+  Legacy 合计：5,276.197128 ns = 8,441.915405 等效周期。
+
+SYNC / Control [aux.sync_control]
+  PIM: unavailable；独立执行时间 unavailable。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：0.000000 ns = 0.000000 等效周期。
+
+Unattributed / Background / Tail [aux.unattributed]
+  PIM: 3,190.000000 归属周期 × 0.625 ns = 1,993.750000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：1,993.750000 ns = 3,190.000000 等效周期。
+
+PIM 发射事件间隔明细
+参考 channel=15；单位为 625 ps 的参考周期。
+下列明细展开上表的 PIM 分项，已经计入 block 总计，不再额外相加。
+间隔归给后一个发射事件；前置命令关联后续 terminal 所属部分。包含等待，不等同命令执行或 completion latency。
+STARTUP/TAIL 是区间记录，不是发射命令；刷新等未归属事件保留在 Unattributed 中。
+Resolved timing（cycles）：nCCD=2, nMODCH=32, nRCDRDMAC=49, nRFCab=288, nRPab=34, nRTP=12。
+
+Q Projection [attention.q_projection]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              11,324
+  WRGB：写入输入 GB                                       4,040
+  WRMAC8：初始化累加器，对应 WR_BIAS                              25
+  RDMAC8：读取结果                                            4
+  ACT / PRE                                          3,734
+  TMOD / CAS 等控制命令                                     513
+  PIM 合计                                            19,640
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                       66            2,748
+    ACT8-2                       66               66
+    CASRDMAC8                     4               59
+    CASWRGB                       8              256
+    CASWRMAC8                     1               32
+    MAC8                      4,144           11,324
+    PREA                         65              920
+    RDMAC8                        4                4
+    TMOD                         18              166
+    WRGB                        512            4,040
+    WRMAC8                        4               25
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48           66            3,168
+    MAC8                          2        4,078            8,156
+    以每条 nCCD=2 为参考预算：4,144 × 2 = 8,288；实际归属 11,324；差额 3,036。
+  Backend 合计（等效周期）：PIM=19,640.000 + PNM=102.400 + CXL=0.000 = 19,742.400。
+
+K/V Projection [attention.kv_projection]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                               2,808
+  WRGB：写入输入 GB                                       1,017
+  WRMAC8：初始化累加器，对应 WR_BIAS                              25
+  RDMAC8：读取结果                                            4
+  ACT / PRE                                            792
+  TMOD / CAS 等控制命令                                     104
+  PIM 合计                                             4,750
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                       16              544
+    ACT8-2                       16               16
+    CASRDMAC8                     4               59
+    CASWRGB                       1               32
+    CASWRMAC8                     1                9
+    MAC8                      1,036            2,808
+    PREA                         16              232
+    RDMAC8                        4                4
+    TMOD                          4                4
+    WRGB                        128            1,017
+    WRMAC8                        4               25
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48           16              768
+    MAC8                          2        1,020            2,040
+    以每条 nCCD=2 为参考预算：1,036 × 2 = 2,072；实际归属 2,808；差额 736。
+  Backend 合计（等效周期）：PIM=4,750.000 + PNM=179.200 + CXL=0.000 = 4,929.200。
+
+QK [attention.qk]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              89,418
+  WRGB：写入输入 GB                                      31,730
+  WRMAC8：初始化累加器，对应 WR_BIAS                           6,193
+  RDMAC8：读取结果                                          992
+  ACT / PRE                                         28,735
+  TMOD / CAS 等控制命令                                  19,945
+  PIM 合计                                           177,013
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                      499           17,672
+    ACT8-2                      499              499
+    CASRDMAC8                   992           14,633
+    CASWRGB                       2               64
+    CASWRMAC8                   249            2,287
+    MAC8                     33,232           89,418
+    PREA                        487           10,564
+    RDMAC8                      992              992
+    TMOD                        529            2,961
+    WRGB                      3,968           31,730
+    WRMAC8                      992            6,193
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48          499           23,952
+    MAC8                          2       32,733           65,466
+    以每条 nCCD=2 为参考预算：33,232 × 2 = 66,464；实际归属 89,418；差额 22,954。
+  Backend 合计（等效周期）：PIM=177,013.000 + PNM=0.000 + CXL=0.000 = 177,013.000。
+
+SV [attention.sv]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              43,408
+  WRGB：写入输入 GB                                      30,892
+  WRMAC8：初始化累加器，对应 WR_BIAS                           6,186
+  RDMAC8：读取结果                                          992
+  ACT / PRE                                          9,154
+  TMOD / CAS 等控制命令                                  21,003
+  PIM 合计                                           111,635
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                      127            4,544
+    ACT8-2                      127              127
+    CASRDMAC8                   992           14,632
+    CASWRGB                      12              384
+    CASWRMAC8                   250            2,296
+    MAC8                     16,976           43,408
+    PREA                        139            4,483
+    RDMAC8                      992              992
+    TMOD                        548            3,691
+    WRGB                      3,872           30,892
+    WRMAC8                      992            6,186
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48          126            6,048
+    MAC8                          2       16,728           33,456
+    TMOD                         32          122            3,904
+    以每条 nCCD=2 为参考预算：16,976 × 2 = 33,952；实际归属 43,408；差额 9,456。
+  Backend 合计（等效周期）：PIM=111,635.000 + PNM=1,536.000 + CXL=0.000 = 113,171.000。
+
+O Projection [attention.o_projection]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              11,278
+  WRGB：写入输入 GB                                       4,040
+  WRMAC8：初始化累加器，对应 WR_BIAS                              25
+  RDMAC8：读取结果                                            4
+  ACT / PRE                                          3,824
+  TMOD / CAS 等控制命令                                     344
+  PIM 合计                                            19,515
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                       66            2,750
+    ACT8-2                       66               66
+    CASRDMAC8                     4               59
+    CASWRGB                       8              256
+    CASWRMAC8                     1                9
+    MAC8                      4,144           11,278
+    PREA                         66            1,008
+    RDMAC8                        4                4
+    TMOD                         18               20
+    WRGB                        512            4,040
+    WRMAC8                        4               25
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48           65            3,120
+    MAC8                          2        4,079            8,158
+    以每条 nCCD=2 为参考预算：4,144 × 2 = 8,288；实际归属 11,278；差额 2,990。
+  Backend 合计（等效周期）：PIM=19,515.000 + PNM=0.000 + CXL=16,883.831 = 36,398.831。
+
+Up/Gate Projection [ffn.up_gate_projection]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              90,408
+  WRGB：写入输入 GB                                      32,341
+  WRMAC8：初始化累加器，对应 WR_BIAS                             100
+  RDMAC8：读取结果                                           16
+  ACT / PRE                                         32,515
+  TMOD / CAS 等控制命令                                   2,491
+  PIM 合计                                           157,871
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                      529           24,078
+    ACT8-2                      529              529
+    CASRDMAC8                    16              236
+    CASWRGB                      61            1,952
+    CASWRMAC8                     4               37
+    MAC8                     33,152           90,408
+    PREA                        529            7,908
+    RDMAC8                       16               16
+    TMOD                        132              266
+    WRGB                      4,096           32,341
+    WRMAC8                       16              100
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48          524           25,152
+    MAC8                          2       32,628           65,256
+    以每条 nCCD=2 为参考预算：33,152 × 2 = 66,304；实际归属 90,408；差额 24,104。
+  Backend 合计（等效周期）：PIM=157,871.000 + PNM=0.000 + CXL=0.000 = 157,871.000。
+
+Down Projection [ffn.down_projection]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              39,634
+  WRGB：写入输入 GB                                      14,140
+  WRMAC8：初始化累加器，对应 WR_BIAS                              25
+  RDMAC8：读取结果                                            4
+  ACT / PRE                                         14,159
+  TMOD / CAS 等控制命令                                   1,215
+  PIM 合计                                            69,177
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                      233           10,460
+    ACT8-2                      233              233
+    CASRDMAC8                     4               59
+    CASWRGB                      28              896
+    CASWRMAC8                     1               11
+    MAC8                     14,504           39,634
+    PREA                        233            3,466
+    RDMAC8                        4                4
+    TMOD                         58              249
+    WRGB                      1,792           14,140
+    WRMAC8                        4               25
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48          231           11,088
+    MAC8                          2       14,273           28,546
+    以每条 nCCD=2 为参考预算：14,504 × 2 = 29,008；实际归属 39,634；差额 10,626。
+  Backend 合计（等效周期）：PIM=69,177.000 + PNM=0.000 + CXL=16,883.831 = 86,060.831。
+
+KV Update [aux.kv_update]
+  归到这些发射事件的时间间隔                         周期
+  ACT / PRE                                            809
+  TMOD / CAS 等控制命令                                     163
+  WR：DRAM 写入                                           431
+  PIM 合计                                             1,403
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT-1                        37              505
+    ACT-2                        36               36
+    CASWR                        12              117
+    PRE                          35              213
+    PREA                          1               55
+    TMOD                          3               46
+    WR                           48              431
+  Backend 合计（等效周期）：PIM=1,403.000 + PNM=0.000 + CXL=0.000 = 1,403.000。
+
+FFN Activation [aux.ffn_activation]
+  归到这些发射事件的时间间隔                         周期
+  ACT / PRE                                             67
+  AF8：阵列内 activation                                   116
+  RDAF8：读取 activation 结果                                 8
+  TMOD / CAS 等控制命令                                      20
+  PIM 合计                                               211
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                        1               34
+    ACT8-2                        1                1
+    AF8                           8              116
+    PREA                          1               32
+    RDAF8                         8                8
+    TMOD                          4               20
+  Backend 合计（等效周期）：PIM=211.000 + PNM=716.800 + CXL=0.000 = 927.800。
+
+Unattributed / Background / Tail [aux.unattributed]
+  归到这些发射事件的时间间隔                         周期
+  TMOD / CAS 等控制命令                                     118
+  REFab                                              3,060
+  STARTUP：首次发射前                                          1
+  TAIL：末次发射后                                            11
+  PIM 合计                                             3,190
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    CASRDAF8                      8              118
+    REFab                        90            3,060
+    STARTUP                       0                1
+    TAIL                          0               11
+  Backend 合计（等效周期）：PIM=3,190.000 + PNM=0.000 + CXL=0.000 = 3,190.000。
+
+全部 PIM 事件间隔合计：564,405；整条 trace：564,405；差额：0 cycles。
+
+对账差额（ns）：{"block": 0.0, "cxl": 3.637978807091713e-12, "pim": 0.0, "pnm": 0.0}
+Source revisions/provenance 与输入 SHA256 见 run_manifest.json。
+SYNC/control 的独立完成时间 unavailable；其共享等待可能包含在 issued gaps 中。
+
+
+==============================================================================
+full/async-single
+==============================================================================
+Llama2-70B FP8 SA4x32; TP2; batch4; window32768; active30976
+LPDDR4 x16 x32 channels; prefetch16; 32 B/burst; nBL8; nCCD2; 625 ps/clock.
+Profile: async-single; Flash=True; pipelined Softmax=True; channel concurrency=True; EWMUL_PNM=ON.
+PIM=564,599 cycles (352.874375 us); PNM=31.935893 us; CXL=26.380986 us; block=411.191253 us.
+PIM totals simulated; PNM/CXL/Softmax exposure retain the reference analytical formulas.
+Two slots means 2 x 2 KiB/channel (4 KiB total). Extra GB area/power is uncalibrated; no energy claim.
+Accounting: global consecutive host phases retire in order at their last all-channel completion.
+States show one reference channel; other-channel/host waits are explicit. Issued counts may overlap; do not sum command spans as latency.
+Legacy kernel estimates remain in the reference report; this report uses completion-aware observer events.
+Residual EWADD arithmetic remains unmodeled; its zero ledger entry is not a hardware latency prediction.
+
+Kernel                              PIM clocks      PNM(us)      CXL(us)       Total(us)
+Attention RMSNorm                            0     0.450000     0.000000       0.450000
+Q Projection                            19,550     0.064000     0.000000      12.282750
+K/V Projection                           4,703     0.112000     0.000000       3.051375
+QK                                     183,852     0.000000     0.000000     114.907500
+SV                                     113,316     0.960000     0.000000      71.782500
+O Projection                            19,036     0.000000    10.552394      22.449894
+FFN RMSNorm                                  0     0.450000     0.000000       0.450000
+Up/Gate Projection                     153,816     0.000000     0.000000      96.135000
+Down Projection                         67,430     0.000000    10.552394      52.696144
+RoPE Q                                       0     3.136000     0.000000       3.136000
+RoPE K                                       0     0.392000     0.000000       0.392000
+KV Update                                2,561     0.000000     0.000000       1.600625
+Softmax                                      0    25.908893     0.000000      25.908893
+FlashAttention Merge                         0     0.015000     0.000000       0.015000
+Score Transfer                               0     0.000000     0.000000       0.000000
+FFN Activation                             329     0.448000     0.000000       0.653625
+Attention Residual                           0     0.000000     0.000000       0.000000
+FFN Residual                                 0     0.000000     0.000000       0.000000
+PP Handoff                                   0     0.000000     5.276197       5.276197
+SYNC / Control                               5     0.000000     0.000000       0.003125
+Unattributed / Background / Tail             1     0.000000     0.000000       0.000625
+
+Attention RMSNorm
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Q Projection
+  PIM exclusive wall cycles: 19,550
+    ACT8-1                                   67 cycles
+    ACT8-2                                   67 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                   7 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                            64 cycles
+    MAC8                                  4,144 cycles
+    MAC_nCCD_or_shared_timing             7,209 cycles
+    PREA                                     63 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                    512 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          89 cycles
+    other_channel_or_host_wait                3 cycles
+    refresh                                 164 cycles
+    row_timing                            3,556 cycles
+    wait_GB_ready                         3,560 cycles
+    issued ACT8-1                            67 events
+    issued ACT8-2                            67 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            7 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           4,144 events
+    issued PREA                              63 events
+    issued RDMAC8                             4 events
+    issued TMOD                               3 events
+    issued WRGB                             512 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=4,144 x 2 = 8,288; WRGB=512 x 8 = 4,096 clocks
+  Observer endpoints: accept=0, first_issue=1, last_issue=19543, complete=19551
+
+K/V Projection
+  PIM exclusive wall cycles: 4,703
+    ACT8-1                                   16 cycles
+    ACT8-2                                   16 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                   1 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                            16 cycles
+    MAC8                                  1,036 cycles
+    MAC_nCCD_or_shared_timing             1,772 cycles
+    PREA                                     16 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                    128 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    row_timing                              682 cycles
+    wait_GB_ready                           914 cycles
+    issued ACT8-1                            16 events
+    issued ACT8-2                            16 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            1 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           1,036 events
+    issued PREA                              16 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                             128 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=1,036 x 2 = 2,072; WRGB=128 x 8 = 1,024 clocks
+  Observer endpoints: accept=19551, first_issue=19552, last_issue=24246, complete=24254
+
+QK
+  PIM exclusive wall cycles: 183,852
+    ACT8-1                                  513 cycles
+    ACT8-2                                  513 cycles
+    CASRDMAC8                               991 cycles
+    CASWRMAC8                               247 cycles
+    GB_completion                         1,976 cycles
+    MAC8                                 33,098 cycles
+    MAC_nCCD_or_shared_timing            56,707 cycles
+    PREA                                    486 cycles
+    PU_mode_setup                         7,904 cycles
+    RDMAC8                                  991 cycles
+    WRGB                                  3,952 cycles
+    WRMAC8                                  988 cycles
+    external_timing                      22,004 cycles
+    other_channel_or_host_wait            1,702 cycles
+    refresh                                 875 cycles
+    row_timing                           24,970 cycles
+    wait_GB_ready                        25,935 cycles
+    issued ACT8-1                           516 events
+    issued ACT8-2                           516 events
+    issued CASRDMAC8                        992 events
+    issued CASWRMAC8                        248 events
+    issued MAC8                          33,232 events
+    issued PREA                             488 events
+    issued RDMAC8                           992 events
+    issued TMOD                             496 events
+    issued WRGB                           3,968 events
+    issued WRMAC8                           992 events
+  II-weighted work budgets (not elapsed latency): MAC8=33,232 x 2 = 66,464; WRGB=3,968 x 8 = 31,744 clocks
+  Observer endpoints: accept=24382, first_issue=24383, last_issue=323464, complete=323472
+
+SV
+  PIM exclusive wall cycles: 113,316
+    ACT8-1                                  133 cycles
+    ACT8-2                                  133 cycles
+    CASRDMAC8                               992 cycles
+    CASWRMAC8                               248 cycles
+    GB_completion                         1,984 cycles
+    MAC8                                 16,976 cycles
+    MAC_nCCD_or_shared_timing            22,979 cycles
+    PREA                                    115 cycles
+    PU_mode_setup                         7,860 cycles
+    RDMAC8                                  992 cycles
+    WRGB                                  3,872 cycles
+    WRMAC8                                  992 cycles
+    external_timing                      21,952 cycles
+    other_channel_or_host_wait              992 cycles
+    refresh                                 894 cycles
+    row_timing                            7,051 cycles
+    wait_GB_ready                        25,151 cycles
+    issued ACT8-1                           133 events
+    issued ACT8-2                           133 events
+    issued CASRDMAC8                        992 events
+    issued CASWRMAC8                        248 events
+    issued MAC8                          16,976 events
+    issued PREA                             115 events
+    issued RDMAC8                           992 events
+    issued TMOD                             496 events
+    issued WRGB                           3,872 events
+    issued WRMAC8                           992 events
+  II-weighted work budgets (not elapsed latency): MAC8=16,976 x 2 = 33,952; WRGB=3,872 x 8 = 30,976 clocks
+  Observer endpoints: accept=28266, first_issue=28267, last_issue=323975, complete=323983
+
+O Projection
+  PIM exclusive wall cycles: 19,036
+    ACT8-1                                   65 cycles
+    ACT8-2                                   65 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                   7 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                            64 cycles
+    MAC8                                  4,144 cycles
+    MAC_nCCD_or_shared_timing             7,135 cycles
+    PREA                                     62 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                    512 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    refresh                                 121 cycles
+    row_timing                            3,225 cycles
+    wait_GB_ready                         3,530 cycles
+    issued ACT8-1                            65 events
+    issued ACT8-2                            65 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            7 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           4,144 events
+    issued PREA                              62 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                             512 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=4,144 x 2 = 8,288; WRGB=512 x 8 = 4,096 clocks
+  Observer endpoints: accept=323983, first_issue=323984, last_issue=343011, complete=343019
+
+FFN RMSNorm
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Up/Gate Projection
+  PIM exclusive wall cycles: 153,816
+    ACT8-1                                  526 cycles
+    ACT8-2                                  526 cycles
+    CASRDMAC8                                16 cycles
+    CASWRGB                                  60 cycles
+    CASWRMAC8                                 4 cycles
+    GB_completion                           512 cycles
+    MAC8                                 33,152 cycles
+    MAC_nCCD_or_shared_timing            57,267 cycles
+    PREA                                    505 cycles
+    PU_mode_setup                           128 cycles
+    RDMAC8                                   16 cycles
+    WRGB                                  4,096 cycles
+    WRMAC8                                   16 cycles
+    external_timing                         228 cycles
+    other_channel_or_host_wait               17 cycles
+    refresh                               1,059 cycles
+    row_timing                           27,486 cycles
+    wait_GB_ready                        28,202 cycles
+    issued ACT8-1                           526 events
+    issued ACT8-2                           526 events
+    issued CASRDMAC8                         16 events
+    issued CASWRGB                           60 events
+    issued CASWRMAC8                          4 events
+    issued MAC8                          33,152 events
+    issued PREA                             505 events
+    issued RDMAC8                            16 events
+    issued TMOD                               8 events
+    issued WRGB                           4,096 events
+    issued WRMAC8                            16 events
+  II-weighted work budgets (not elapsed latency): MAC8=33,152 x 2 = 66,304; WRGB=4,096 x 8 = 32,768 clocks
+  Observer endpoints: accept=343020, first_issue=343021, last_issue=496827, complete=496835
+
+Down Projection
+  PIM exclusive wall cycles: 67,430
+    ACT8-1                                  232 cycles
+    ACT8-2                                  232 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                  27 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                           224 cycles
+    MAC8                                 14,504 cycles
+    MAC_nCCD_or_shared_timing            25,100 cycles
+    PREA                                    221 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                  1,792 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    refresh                                 573 cycles
+    row_timing                           12,130 cycles
+    wait_GB_ready                        12,289 cycles
+    issued ACT8-1                           232 events
+    issued ACT8-2                           232 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                           27 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                          14,504 events
+    issued PREA                             221 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                           1,792 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=14,504 x 2 = 29,008; WRGB=1,792 x 8 = 14,336 clocks
+  Observer endpoints: accept=497166, first_issue=497167, last_issue=564588, complete=564596
+
+RoPE Q
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+RoPE K
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+KV Update
+  PIM exclusive wall cycles: 2,561
+    other_channel_or_host_wait            1,501 cycles
+    other_phase_or_channel_wait           1,060 cycles
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Softmax
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+FlashAttention Merge
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Score Transfer
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+FFN Activation
+  PIM exclusive wall cycles: 329
+    ACT8-1                                    1 cycles
+    ACT8-2                                    1 cycles
+    AF8                                       8 cycles
+    CASRDAF8                                  8 cycles
+    PREA                                      1 cycles
+    RDAF8                                     8 cycles
+    external_timing                         294 cycles
+    other_channel_or_host_wait                8 cycles
+    issued ACT8-1                             1 events
+    issued ACT8-2                             1 events
+    issued AF8                                8 events
+    issued CASRDAF8                           8 events
+    issued PREA                               1 events
+    issued RDAF8                              8 events
+    issued TMOD                               4 events
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=496835, first_issue=496836, last_issue=497156, complete=497164
+
+Attention Residual
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+FFN Residual
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+PP Handoff
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+SYNC / Control
+  PIM exclusive wall cycles: 5
+    fence                                     2 cycles
+    other_channel_or_host_wait                3 cycles
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=497164, first_issue=None, last_issue=None, complete=564599
+
+Unattributed / Background / Tail
+  PIM exclusive wall cycles: 1
+    idle_or_tail                              1 cycles
+    issued PREA                              84 events
+    issued REFab                             90 events
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=6261, last_issue=562534, complete=None
+
+All-channel lifecycle/resource validation: PASS
+Reference channel: 0
+Reference-channel simultaneous PU-step / WRGB-issue clocks: 0
+Reconciliation residuals: {'pim': 0.0, 'block': 0.0}
+
+
+==============================================================================
+full/async-serialized
+==============================================================================
+Llama2-70B FP8 SA4x32; TP2; batch4; window32768; active30976
+LPDDR4 x16 x32 channels; prefetch16; 32 B/burst; nBL8; nCCD2; 625 ps/clock.
+Profile: async-serialized; Flash=True; pipelined Softmax=True; channel concurrency=True; EWMUL_PNM=ON.
+PIM=564,599 cycles (352.874375 us); PNM=31.935893 us; CXL=26.380986 us; block=411.191253 us.
+PIM totals simulated; PNM/CXL/Softmax exposure retain the reference analytical formulas.
+Two slots means 2 x 2 KiB/channel (4 KiB total). Extra GB area/power is uncalibrated; no energy claim.
+Accounting: global consecutive host phases retire in order at their last all-channel completion.
+States show one reference channel; other-channel/host waits are explicit. Issued counts may overlap; do not sum command spans as latency.
+Legacy kernel estimates remain in the reference report; this report uses completion-aware observer events.
+Residual EWADD arithmetic remains unmodeled; its zero ledger entry is not a hardware latency prediction.
+
+Kernel                              PIM clocks      PNM(us)      CXL(us)       Total(us)
+Attention RMSNorm                            0     0.450000     0.000000       0.450000
+Q Projection                            19,550     0.064000     0.000000      12.282750
+K/V Projection                           4,703     0.112000     0.000000       3.051375
+QK                                     183,852     0.000000     0.000000     114.907500
+SV                                     113,316     0.960000     0.000000      71.782500
+O Projection                            19,036     0.000000    10.552394      22.449894
+FFN RMSNorm                                  0     0.450000     0.000000       0.450000
+Up/Gate Projection                     153,816     0.000000     0.000000      96.135000
+Down Projection                         67,430     0.000000    10.552394      52.696144
+RoPE Q                                       0     3.136000     0.000000       3.136000
+RoPE K                                       0     0.392000     0.000000       0.392000
+KV Update                                2,561     0.000000     0.000000       1.600625
+Softmax                                      0    25.908893     0.000000      25.908893
+FlashAttention Merge                         0     0.015000     0.000000       0.015000
+Score Transfer                               0     0.000000     0.000000       0.000000
+FFN Activation                             329     0.448000     0.000000       0.653625
+Attention Residual                           0     0.000000     0.000000       0.000000
+FFN Residual                                 0     0.000000     0.000000       0.000000
+PP Handoff                                   0     0.000000     5.276197       5.276197
+SYNC / Control                               5     0.000000     0.000000       0.003125
+Unattributed / Background / Tail             1     0.000000     0.000000       0.000625
+
+Attention RMSNorm
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Q Projection
+  PIM exclusive wall cycles: 19,550
+    ACT8-1                                   67 cycles
+    ACT8-2                                   67 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                   7 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                            64 cycles
+    MAC8                                  4,144 cycles
+    MAC_nCCD_or_shared_timing             7,209 cycles
+    PREA                                     63 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                    512 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          89 cycles
+    other_channel_or_host_wait                3 cycles
+    refresh                                 164 cycles
+    row_timing                            3,556 cycles
+    wait_GB_ready                         3,560 cycles
+    issued ACT8-1                            67 events
+    issued ACT8-2                            67 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            7 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           4,144 events
+    issued PREA                              63 events
+    issued RDMAC8                             4 events
+    issued TMOD                               3 events
+    issued WRGB                             512 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=4,144 x 2 = 8,288; WRGB=512 x 8 = 4,096 clocks
+  Observer endpoints: accept=0, first_issue=1, last_issue=19543, complete=19551
+
+K/V Projection
+  PIM exclusive wall cycles: 4,703
+    ACT8-1                                   16 cycles
+    ACT8-2                                   16 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                   1 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                            16 cycles
+    MAC8                                  1,036 cycles
+    MAC_nCCD_or_shared_timing             1,772 cycles
+    PREA                                     16 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                    128 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    row_timing                              682 cycles
+    wait_GB_ready                           914 cycles
+    issued ACT8-1                            16 events
+    issued ACT8-2                            16 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            1 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           1,036 events
+    issued PREA                              16 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                             128 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=1,036 x 2 = 2,072; WRGB=128 x 8 = 1,024 clocks
+  Observer endpoints: accept=19551, first_issue=19552, last_issue=24246, complete=24254
+
+QK
+  PIM exclusive wall cycles: 183,852
+    ACT8-1                                  513 cycles
+    ACT8-2                                  513 cycles
+    CASRDMAC8                               991 cycles
+    CASWRMAC8                               247 cycles
+    GB_completion                         1,976 cycles
+    MAC8                                 33,098 cycles
+    MAC_nCCD_or_shared_timing            56,707 cycles
+    PREA                                    486 cycles
+    PU_mode_setup                         7,904 cycles
+    RDMAC8                                  991 cycles
+    WRGB                                  3,952 cycles
+    WRMAC8                                  988 cycles
+    external_timing                      22,004 cycles
+    other_channel_or_host_wait            1,702 cycles
+    refresh                                 875 cycles
+    row_timing                           24,970 cycles
+    wait_GB_ready                        25,935 cycles
+    issued ACT8-1                           516 events
+    issued ACT8-2                           516 events
+    issued CASRDMAC8                        992 events
+    issued CASWRMAC8                        248 events
+    issued MAC8                          33,232 events
+    issued PREA                             488 events
+    issued RDMAC8                           992 events
+    issued TMOD                             496 events
+    issued WRGB                           3,968 events
+    issued WRMAC8                           992 events
+  II-weighted work budgets (not elapsed latency): MAC8=33,232 x 2 = 66,464; WRGB=3,968 x 8 = 31,744 clocks
+  Observer endpoints: accept=24382, first_issue=24383, last_issue=323464, complete=323472
+
+SV
+  PIM exclusive wall cycles: 113,316
+    ACT8-1                                  133 cycles
+    ACT8-2                                  133 cycles
+    CASRDMAC8                               992 cycles
+    CASWRMAC8                               248 cycles
+    GB_completion                         1,984 cycles
+    MAC8                                 16,976 cycles
+    MAC_nCCD_or_shared_timing            22,979 cycles
+    PREA                                    115 cycles
+    PU_mode_setup                         7,860 cycles
+    RDMAC8                                  992 cycles
+    WRGB                                  3,872 cycles
+    WRMAC8                                  992 cycles
+    external_timing                      21,952 cycles
+    other_channel_or_host_wait              992 cycles
+    refresh                                 894 cycles
+    row_timing                            7,051 cycles
+    wait_GB_ready                        25,151 cycles
+    issued ACT8-1                           133 events
+    issued ACT8-2                           133 events
+    issued CASRDMAC8                        992 events
+    issued CASWRMAC8                        248 events
+    issued MAC8                          16,976 events
+    issued PREA                             115 events
+    issued RDMAC8                           992 events
+    issued TMOD                             496 events
+    issued WRGB                           3,872 events
+    issued WRMAC8                           992 events
+  II-weighted work budgets (not elapsed latency): MAC8=16,976 x 2 = 33,952; WRGB=3,872 x 8 = 30,976 clocks
+  Observer endpoints: accept=28266, first_issue=28267, last_issue=323975, complete=323983
+
+O Projection
+  PIM exclusive wall cycles: 19,036
+    ACT8-1                                   65 cycles
+    ACT8-2                                   65 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                   7 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                            64 cycles
+    MAC8                                  4,144 cycles
+    MAC_nCCD_or_shared_timing             7,135 cycles
+    PREA                                     62 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                    512 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    refresh                                 121 cycles
+    row_timing                            3,225 cycles
+    wait_GB_ready                         3,530 cycles
+    issued ACT8-1                            65 events
+    issued ACT8-2                            65 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            7 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           4,144 events
+    issued PREA                              62 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                             512 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=4,144 x 2 = 8,288; WRGB=512 x 8 = 4,096 clocks
+  Observer endpoints: accept=323983, first_issue=323984, last_issue=343011, complete=343019
+
+FFN RMSNorm
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Up/Gate Projection
+  PIM exclusive wall cycles: 153,816
+    ACT8-1                                  526 cycles
+    ACT8-2                                  526 cycles
+    CASRDMAC8                                16 cycles
+    CASWRGB                                  60 cycles
+    CASWRMAC8                                 4 cycles
+    GB_completion                           512 cycles
+    MAC8                                 33,152 cycles
+    MAC_nCCD_or_shared_timing            57,267 cycles
+    PREA                                    505 cycles
+    PU_mode_setup                           128 cycles
+    RDMAC8                                   16 cycles
+    WRGB                                  4,096 cycles
+    WRMAC8                                   16 cycles
+    external_timing                         228 cycles
+    other_channel_or_host_wait               17 cycles
+    refresh                               1,059 cycles
+    row_timing                           27,486 cycles
+    wait_GB_ready                        28,202 cycles
+    issued ACT8-1                           526 events
+    issued ACT8-2                           526 events
+    issued CASRDMAC8                         16 events
+    issued CASWRGB                           60 events
+    issued CASWRMAC8                          4 events
+    issued MAC8                          33,152 events
+    issued PREA                             505 events
+    issued RDMAC8                            16 events
+    issued TMOD                               8 events
+    issued WRGB                           4,096 events
+    issued WRMAC8                            16 events
+  II-weighted work budgets (not elapsed latency): MAC8=33,152 x 2 = 66,304; WRGB=4,096 x 8 = 32,768 clocks
+  Observer endpoints: accept=343020, first_issue=343021, last_issue=496827, complete=496835
+
+Down Projection
+  PIM exclusive wall cycles: 67,430
+    ACT8-1                                  232 cycles
+    ACT8-2                                  232 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRGB                                  27 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                           224 cycles
+    MAC8                                 14,504 cycles
+    MAC_nCCD_or_shared_timing            25,100 cycles
+    PREA                                    221 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                  1,792 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    refresh                                 573 cycles
+    row_timing                           12,130 cycles
+    wait_GB_ready                        12,289 cycles
+    issued ACT8-1                           232 events
+    issued ACT8-2                           232 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                           27 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                          14,504 events
+    issued PREA                             221 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                           1,792 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=14,504 x 2 = 29,008; WRGB=1,792 x 8 = 14,336 clocks
+  Observer endpoints: accept=497166, first_issue=497167, last_issue=564588, complete=564596
+
+RoPE Q
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+RoPE K
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+KV Update
+  PIM exclusive wall cycles: 2,561
+    other_channel_or_host_wait            1,501 cycles
+    other_phase_or_channel_wait           1,060 cycles
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Softmax
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+FlashAttention Merge
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Score Transfer
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+FFN Activation
+  PIM exclusive wall cycles: 329
+    ACT8-1                                    1 cycles
+    ACT8-2                                    1 cycles
+    AF8                                       8 cycles
+    CASRDAF8                                  8 cycles
+    PREA                                      1 cycles
+    RDAF8                                     8 cycles
+    external_timing                         294 cycles
+    other_channel_or_host_wait                8 cycles
+    issued ACT8-1                             1 events
+    issued ACT8-2                             1 events
+    issued AF8                                8 events
+    issued CASRDAF8                           8 events
+    issued PREA                               1 events
+    issued RDAF8                              8 events
+    issued TMOD                               4 events
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=496835, first_issue=496836, last_issue=497156, complete=497164
+
+Attention Residual
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+FFN Residual
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+PP Handoff
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+SYNC / Control
+  PIM exclusive wall cycles: 5
+    fence                                     2 cycles
+    other_channel_or_host_wait                3 cycles
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=497164, first_issue=None, last_issue=None, complete=564599
+
+Unattributed / Background / Tail
+  PIM exclusive wall cycles: 1
+    idle_or_tail                              1 cycles
+    issued PREA                              84 events
+    issued REFab                             90 events
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=6261, last_issue=562534, complete=None
+
+All-channel lifecycle/resource validation: PASS
+Reference channel: 0
+Reference-channel simultaneous PU-step / WRGB-issue clocks: 0
+Reconciliation residuals: {'pim': 0.0, 'block': 0.0}
+
+
+==============================================================================
+full/double
+==============================================================================
+Llama2-70B FP8 SA4x32; TP2; batch4; window32768; active30976
+LPDDR4 x16 x32 channels; prefetch16; 32 B/burst; nBL8; nCCD2; 625 ps/clock.
+Profile: double; Flash=True; pipelined Softmax=True; channel concurrency=True; EWMUL_PNM=ON.
+PIM=512,470 cycles (320.293750 us); PNM=31.935893 us; CXL=26.380986 us; block=378.610628 us.
+PIM totals simulated; PNM/CXL/Softmax exposure retain the reference analytical formulas.
+Two slots means 2 x 2 KiB/channel (4 KiB total). Extra GB area/power is uncalibrated; no energy claim.
+Accounting: global consecutive host phases retire in order at their last all-channel completion.
+States show one reference channel; other-channel/host waits are explicit. Issued counts may overlap; do not sum command spans as latency.
+Legacy kernel estimates remain in the reference report; this report uses completion-aware observer events.
+Residual EWADD arithmetic remains unmodeled; its zero ledger entry is not a hardware latency prediction.
+
+Kernel                              PIM clocks      PNM(us)      CXL(us)       Total(us)
+Attention RMSNorm                            0     0.450000     0.000000       0.450000
+Q Projection                            15,607     0.064000     0.000000       9.818375
+K/V Projection                           4,549     0.112000     0.000000       2.955125
+QK                                     183,757     0.000000     0.000000     114.848125
+SV                                     113,103     0.960000     0.000000      71.649375
+O Projection                            15,615     0.000000    10.552394      20.311769
+FFN RMSNorm                                  0     0.450000     0.000000       0.450000
+Up/Gate Projection                     123,851     0.000000     0.000000      77.406875
+Down Projection                         53,229     0.000000    10.552394      43.820519
+RoPE Q                                       0     3.136000     0.000000       3.136000
+RoPE K                                       0     0.392000     0.000000       0.392000
+KV Update                                2,424     0.000000     0.000000       1.515000
+Softmax                                      0    25.908893     0.000000      25.908893
+FlashAttention Merge                         0     0.015000     0.000000       0.015000
+Score Transfer                               0     0.000000     0.000000       0.000000
+FFN Activation                             329     0.448000     0.000000       0.653625
+Attention Residual                           0     0.000000     0.000000       0.000000
+FFN Residual                                 0     0.000000     0.000000       0.000000
+PP Handoff                                   0     0.000000     5.276197       5.276197
+SYNC / Control                               5     0.000000     0.000000       0.003125
+Unattributed / Background / Tail             1     0.000000     0.000000       0.000625
+
+Attention RMSNorm
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Q Projection
+  PIM exclusive wall cycles: 15,607
+    ACT8-1                                   66 cycles
+    ACT8-2                                   66 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                             8 cycles
+    MAC8                                  4,144 cycles
+    MAC_nCCD_or_shared_timing             7,181 cycles
+    PREA                                     63 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                     64 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          89 cycles
+    other_channel_or_host_wait                3 cycles
+    refresh                                  91 cycles
+    row_timing                            3,346 cycles
+    wait_GB_ready                           441 cycles
+    issued ACT8-1                            66 events
+    issued ACT8-2                            66 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            8 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           4,144 events
+    issued PREA                              63 events
+    issued RDMAC8                             4 events
+    issued TMOD                               3 events
+    issued WRGB                             512 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=4,144 x 2 = 8,288; WRGB=512 x 8 = 4,096 clocks
+  Observer endpoints: accept=0, first_issue=1, last_issue=15600, complete=15608
+
+K/V Projection
+  PIM exclusive wall cycles: 4,549
+    ACT8-1                                   17 cycles
+    ACT8-2                                   17 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                             8 cycles
+    MAC8                                  1,036 cycles
+    MAC_nCCD_or_shared_timing             1,819 cycles
+    PREA                                     16 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                     64 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    refresh                                  45 cycles
+    row_timing                              980 cycles
+    wait_GB_ready                           441 cycles
+    issued ACT8-1                            17 events
+    issued ACT8-2                            17 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            1 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           1,036 events
+    issued PREA                              16 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                             128 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=1,036 x 2 = 2,072; WRGB=128 x 8 = 1,024 clocks
+  Observer endpoints: accept=15608, first_issue=15609, last_issue=20149, complete=20157
+
+QK
+  PIM exclusive wall cycles: 183,757
+    ACT8-1                                  513 cycles
+    ACT8-2                                  513 cycles
+    CASRDMAC8                               991 cycles
+    CASWRMAC8                               247 cycles
+    GB_completion                         1,976 cycles
+    MAC8                                 33,098 cycles
+    MAC_nCCD_or_shared_timing            56,707 cycles
+    PREA                                    484 cycles
+    PU_mode_setup                         7,904 cycles
+    RDMAC8                                  991 cycles
+    WRGB                                  3,952 cycles
+    WRMAC8                                  988 cycles
+    external_timing                      22,004 cycles
+    other_channel_or_host_wait            1,702 cycles
+    refresh                                 894 cycles
+    row_timing                           24,888 cycles
+    wait_GB_ready                        25,905 cycles
+    issued ACT8-1                           515 events
+    issued ACT8-2                           515 events
+    issued CASRDMAC8                        992 events
+    issued CASWRMAC8                        248 events
+    issued MAC8                          33,232 events
+    issued PREA                             486 events
+    issued RDMAC8                           992 events
+    issued TMOD                             496 events
+    issued WRGB                           3,968 events
+    issued WRMAC8                           992 events
+  II-weighted work budgets (not elapsed latency): MAC8=33,232 x 2 = 66,464; WRGB=3,968 x 8 = 31,744 clocks
+  Observer endpoints: accept=20285, first_issue=20286, last_issue=318634, complete=318642
+
+SV
+  PIM exclusive wall cycles: 113,103
+    ACT8-1                                  133 cycles
+    ACT8-2                                  133 cycles
+    CASRDMAC8                               992 cycles
+    CASWRMAC8                               249 cycles
+    GB_completion                         1,984 cycles
+    MAC8                                 16,976 cycles
+    MAC_nCCD_or_shared_timing            22,979 cycles
+    PREA                                    115 cycles
+    PU_mode_setup                         7,906 cycles
+    RDMAC8                                  992 cycles
+    WRGB                                  3,872 cycles
+    WRMAC8                                  992 cycles
+    external_timing                      21,933 cycles
+    other_channel_or_host_wait              992 cycles
+    refresh                                 924 cycles
+    row_timing                            6,811 cycles
+    wait_GB_ready                        25,120 cycles
+    issued ACT8-1                           133 events
+    issued ACT8-2                           133 events
+    issued CASRDMAC8                        992 events
+    issued CASWRMAC8                        249 events
+    issued MAC8                          16,976 events
+    issued PREA                             115 events
+    issued RDMAC8                           992 events
+    issued TMOD                             496 events
+    issued WRGB                           3,872 events
+    issued WRMAC8                           992 events
+  II-weighted work budgets (not elapsed latency): MAC8=16,976 x 2 = 33,952; WRGB=3,872 x 8 = 30,976 clocks
+  Observer endpoints: accept=24032, first_issue=24033, last_issue=319433, complete=319441
+
+O Projection
+  PIM exclusive wall cycles: 15,615
+    ACT8-1                                   66 cycles
+    ACT8-2                                   66 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                             8 cycles
+    MAC8                                  4,144 cycles
+    MAC_nCCD_or_shared_timing             7,182 cycles
+    PREA                                     64 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                     64 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    refresh                                  95 cycles
+    row_timing                            3,379 cycles
+    wait_GB_ready                           441 cycles
+    issued ACT8-1                            66 events
+    issued ACT8-2                            66 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                            7 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                           4,144 events
+    issued PREA                              64 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                             512 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=4,144 x 2 = 8,288; WRGB=512 x 8 = 4,096 clocks
+  Observer endpoints: accept=319441, first_issue=319442, last_issue=335048, complete=335056
+
+FFN RMSNorm
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Up/Gate Projection
+  PIM exclusive wall cycles: 123,851
+    ACT8-1                                  530 cycles
+    ACT8-2                                  530 cycles
+    CASRDMAC8                                16 cycles
+    CASWRMAC8                                 4 cycles
+    GB_completion                            32 cycles
+    MAC8                                 33,152 cycles
+    MAC_nCCD_or_shared_timing            57,416 cycles
+    PREA                                    511 cycles
+    PU_mode_setup                           128 cycles
+    RDMAC8                                   16 cycles
+    WRGB                                    256 cycles
+    WRMAC8                                   16 cycles
+    external_timing                         228 cycles
+    other_channel_or_host_wait               17 cycles
+    refresh                               1,048 cycles
+    row_timing                           28,187 cycles
+    wait_GB_ready                         1,764 cycles
+    issued ACT8-1                           530 events
+    issued ACT8-2                           530 events
+    issued CASRDMAC8                         16 events
+    issued CASWRGB                           60 events
+    issued CASWRMAC8                          4 events
+    issued MAC8                          33,152 events
+    issued PREA                             511 events
+    issued RDMAC8                            16 events
+    issued TMOD                               8 events
+    issued WRGB                           4,096 events
+    issued WRMAC8                            16 events
+  II-weighted work budgets (not elapsed latency): MAC8=33,152 x 2 = 66,304; WRGB=4,096 x 8 = 32,768 clocks
+  Observer endpoints: accept=335057, first_issue=335058, last_issue=458899, complete=458907
+
+Down Projection
+  PIM exclusive wall cycles: 53,229
+    ACT8-1                                  229 cycles
+    ACT8-2                                  229 cycles
+    CASRDMAC8                                 4 cycles
+    CASWRMAC8                                 1 cycles
+    GB_completion                             8 cycles
+    MAC8                                 14,504 cycles
+    MAC_nCCD_or_shared_timing            25,002 cycles
+    PREA                                    223 cycles
+    PU_mode_setup                            32 cycles
+    RDMAC8                                    4 cycles
+    WRGB                                     64 cycles
+    WRMAC8                                    4 cycles
+    external_timing                          57 cycles
+    other_channel_or_host_wait                4 cycles
+    refresh                                 354 cycles
+    row_timing                           12,069 cycles
+    wait_GB_ready                           441 cycles
+    issued ACT8-1                           229 events
+    issued ACT8-2                           229 events
+    issued CASRDMAC8                          4 events
+    issued CASWRGB                           27 events
+    issued CASWRMAC8                          1 events
+    issued MAC8                          14,504 events
+    issued PREA                             223 events
+    issued RDMAC8                             4 events
+    issued TMOD                               2 events
+    issued WRGB                           1,792 events
+    issued WRMAC8                             4 events
+  II-weighted work budgets (not elapsed latency): MAC8=14,504 x 2 = 29,008; WRGB=1,792 x 8 = 14,336 clocks
+  Observer endpoints: accept=459238, first_issue=459239, last_issue=512459, complete=512467
+
+RoPE Q
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+RoPE K
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+KV Update
+  PIM exclusive wall cycles: 2,424
+    other_channel_or_host_wait            1,745 cycles
+    other_phase_or_channel_wait             679 cycles
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Softmax
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+FlashAttention Merge
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+Score Transfer
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+FFN Activation
+  PIM exclusive wall cycles: 329
+    ACT8-1                                    1 cycles
+    ACT8-2                                    1 cycles
+    AF8                                       8 cycles
+    CASRDAF8                                  8 cycles
+    PREA                                      1 cycles
+    RDAF8                                     8 cycles
+    external_timing                         294 cycles
+    other_channel_or_host_wait                8 cycles
+    issued ACT8-1                             1 events
+    issued ACT8-2                             1 events
+    issued AF8                                8 events
+    issued CASRDAF8                           8 events
+    issued PREA                               1 events
+    issued RDAF8                              8 events
+    issued TMOD                               4 events
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=458907, first_issue=458908, last_issue=459228, complete=459236
+
+Attention Residual
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+FFN Residual
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+PP Handoff
+  PIM exclusive wall cycles: 0
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=None, last_issue=None, complete=None
+
+SYNC / Control
+  PIM exclusive wall cycles: 5
+    fence                                     2 cycles
+    other_channel_or_host_wait                3 cycles
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=459236, first_issue=None, last_issue=None, complete=512470
+
+Unattributed / Background / Tail
+  PIM exclusive wall cycles: 1
+    idle_or_tail                              1 cycles
+    issued PREA                              77 events
+    issued REFab                             81 events
+  II-weighted work budgets (not elapsed latency): MAC8=0 x 2 = 0; WRGB=0 x 8 = 0 clocks
+  Observer endpoints: accept=None, first_issue=6260, last_issue=506295, complete=None
+
+All-channel lifecycle/resource validation: PASS
+Reference channel: 0
+Reference-channel simultaneous PU-step / WRGB-issue clocks: 151
+Reconciliation residuals: {'pim': 0.0, 'block': 0.0}

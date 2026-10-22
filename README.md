@@ -213,6 +213,68 @@ states its actual interface. PNM/CXL and pipelined Softmax remain legacy
 analytical formulas. The separate archived FP8 campaign remains a historical
 record of the former interface model.
 
+#### Double buffering: LPDDR4 hardware profile
+
+Use `--pim-double-buffering` to select the new `AiMAsync` backend. Each channel
+has **two complete 2 KiB GBs (4 KiB total)**. A bounded PU descriptor retains
+its input generation while the external path fills the other slot. MAC steps
+retain nCCD2, GB bursts retain nBL8, and row/refresh timing and the external
+command limit remain active. The independent internal PU path and latched mode
+are explicit hardware assumptions. The default `AiM` backend is unchanged.
+
+The same FP8 SA4x32 / TP2 / batch4 traces were replayed without changing work,
+bytes or mapping: window32768, active length30976, LPDDR4 x16/prefetch16.
+
+| Variant | Legacy PIM cycles | Double-buffer PIM cycles | Legacy block (µs) | Double-buffer block (µs) | Block reduction |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Baseline (EWMUL_PNM ON) | 713,214 | 624,183 | 576.119736 | 520.475361 | 9.66% |
+| Full four optimizations | 564,405 | 512,470 | 411.070003 | 378.610628 | 7.90% |
+
+The L/A1/A2/A3 ablations isolate the source of the improvement. Async single-GB
+and async two-GB serialized produce identical totals: 703,088 cycles in the
+baseline and 564,599 with full optimizations. Enabling overlap on that same
+backend saves a further **78,905 / 52,129 cycles** respectively. Async execution
+alone is slightly slower in the full case (+194 cycles); capacity without
+overlap provides no benefit in this experiment.
+
+Most of the optimized-case saving comes from projections: Up/Gate saves
+29,965 cycles and Down saves 14,201 relative to the serialized async control.
+Baseline SV saves another 26,825 cycles. The current QK phases and FlashAttention
+SV phases have no MAC-body/GB-fill interval overlap: their readback boundaries
+prevent lookahead into the next input group. Small timing changes there reflect
+shared timing/refresh shifts. `overlap.csv` records interval overlap separately
+from same-clock issue progress; interval overlap includes stalls and is not an
+additive latency or utilization measure.
+
+Reproduce all eight cases using retained legacy assets:
+
+```bash
+cd cent_simulation
+python scripts/run_double_buffering_case.py
+```
+
+If the reference assets are absent, first run
+`python scripts/run_legacy_optimization_case.py --variants baseline full`.
+`--reuse` on the double-buffer runner reuses raw runs only when engine/binary,
+configuration and trace hashes match. For a regular model run, add
+`--pim-double-buffering` alongside the four optimization flags documented above;
+its logs and CSV provenance identify the new execution profile.
+
+[Committed comparison and complete kernel details](cent_simulation/results/double_buffering_fp8_32k_batch4/summary.txt)
+include the eight cases, PIM/PNM/CXL totals, exclusive scheduler-state cycles,
+issued command counts and MAC/GB work budgets for every kernel. The CSV tables,
+build hashes, raw-run checksums and validation record are in the same folder.
+Raw logs, all-channel events and resolved configurations remain under
+`cent_simulation/output/legacy_double_buffering/LPDDR4_nCCD2_TP2_32K_batch4`.
+
+Concurrent traces use global phase-completion watermarks across all channels;
+the summaries show reference-channel scheduler states and waits on other
+channels explicitly. Legacy FIFO issued-gap attribution is rejected for the
+new profile. PNM/CXL and streaming Softmax exposure retain their analytical
+formulas; residual EWADD arithmetic remains unmodeled. Additional GB area and
+energy are uncalibrated. Numerical tests validate operand lifetime with two
+physical payload arrays; this is not a bit-accurate FP8 functional engine.
+
 To reproduce the requested pair, use `--variants baseline full` (also the
 comparison script's default). To keep only the indexed pair without running
 the simulator, use:

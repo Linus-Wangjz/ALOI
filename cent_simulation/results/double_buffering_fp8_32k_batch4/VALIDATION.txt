@@ -1,0 +1,14 @@
+Build: cmake --build aim_simulator/build -j4
+Tests: cd cent_simulation && python -m unittest discover -s tests -v
+----------------------------------------------------------------------
+Ran 131 tests in 2.620s
+
+OK
+
+Benchmark: python cent_simulation/scripts/run_double_buffering_case.py --reuse
+All eight cases rerun against the final compiled backend; raw traces identical to retained reference.
+Lifecycle, work conservation and exclusive cycle-ledger reconciliation passed on all 32 channels.
+Coverage: one/two slots, serialized/overlap, channel masks, fanout retries, bounded descriptors,
+last-burst readiness, MAC1/3/64 duration, nCCD2/6, ACT/PRE/refresh constraints, RD_MAC/WR_BIAS/AF,
+SYNC/EOC, observer on/off equivalence, multiple events/clock, two physical 2 KiB payloads,
+global all-channel phase accounting, and rejection of legacy gap attribution for the new profile.

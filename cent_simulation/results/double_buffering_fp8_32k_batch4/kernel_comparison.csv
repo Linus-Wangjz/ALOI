@@ -1,0 +1,169 @@
+variant,profile,region_id,kernel,pim_cycles,pnm_us,cxl_us,total_us
+baseline,legacy,attention.rmsnorm,Attention RMSNorm,0.0,0.45,0.0,0.45
+baseline,legacy,attention.q_projection,Q Projection,19640.0,0.064,0.0,12.339
+baseline,legacy,attention.kv_projection,K/V Projection,4750.0,0.112,0.0,3.08075
+baseline,legacy,attention.qk,QK,93686.0,0.0,0.0,58.55375
+baseline,legacy,attention.sv,SV,94126.0,0.96,0.0,59.78875
+baseline,legacy,attention.o_projection,O Projection,19741.0,0.0,10.552394256591796,22.890519256591798
+baseline,legacy,ffn.rmsnorm,FFN RMSNorm,0.0,0.45,0.0,0.45
+baseline,legacy,ffn.up_gate_projection,Up/Gate Projection,157727.0,0.0,0.0,98.579375
+baseline,legacy,ffn.down_projection,Down Projection,69372.0,0.0,10.552394256591796,53.9098942565918
+baseline,legacy,aux.rope_q,RoPE Q,0.0,3.136,0.0,3.136
+baseline,legacy,aux.rope_k,RoPE K,0.0,0.392,0.0,0.392
+baseline,legacy,aux.kv_update,KV Update,1403.0,0.0,0.0,0.876875
+baseline,legacy,aux.softmax,Softmax,0.0,97.968,0.0,97.968
+baseline,legacy,aux.flash_merge,FlashAttention Merge,0.0,0.0,0.0,0.0
+baseline,legacy,aux.score_transfer,Score Transfer,248552.0,0.0,0.0,155.345
+baseline,legacy,aux.ffn_activation,FFN Activation,211.0,0.448,0.0,0.579875
+baseline,legacy,aux.attention_residual,Attention Residual,,0.0,0.0,0.0
+baseline,legacy,aux.ffn_residual,FFN Residual,,0.0,0.0,0.0
+baseline,legacy,aux.pp_handoff,PP Handoff,0.0,0.0,5.276197128295898,5.276197128295898
+baseline,legacy,aux.sync_control,SYNC / Control,,0.0,0.0,0.0
+baseline,legacy,aux.unattributed,Unattributed / Background / Tail,4006.0,0.0,0.0,2.50375
+baseline,async-single,attention.rmsnorm,Attention RMSNorm,0,0.45,0.0,0.45
+baseline,async-single,attention.q_projection,Q Projection,19550,0.064,0.0,12.28275
+baseline,async-single,attention.kv_projection,K/V Projection,4703,0.112,0.0,3.051375
+baseline,async-single,attention.qk,QK,95029,0.0,0.0,59.393125
+baseline,async-single,attention.sv,SV,90072,0.96,0.0,57.255
+baseline,async-single,attention.o_projection,O Projection,19121,0.0,10.552394256591796,22.5030192565918
+baseline,async-single,ffn.rmsnorm,FFN RMSNorm,0,0.45,0.0,0.45
+baseline,async-single,ffn.up_gate_projection,Up/Gate Projection,154130,0.0,0.0,96.33125
+baseline,async-single,ffn.down_projection,Down Projection,67439,0.0,10.552394256591796,52.701769256591795
+baseline,async-single,aux.rope_q,RoPE Q,0,3.136,0.0,3.136
+baseline,async-single,aux.rope_k,RoPE K,0,0.392,0.0,0.392
+baseline,async-single,aux.kv_update,KV Update,2561,0.0,0.0,1.600625
+baseline,async-single,aux.softmax,Softmax,0,97.968,0.0,97.968
+baseline,async-single,aux.flash_merge,FlashAttention Merge,0,0.0,0.0,0.0
+baseline,async-single,aux.score_transfer,Score Transfer,250140,0.0,0.0,156.3375
+baseline,async-single,aux.ffn_activation,FFN Activation,329,0.448,0.0,0.653625
+baseline,async-single,aux.attention_residual,Attention Residual,,0.0,0.0,0.0
+baseline,async-single,aux.ffn_residual,FFN Residual,,0.0,0.0,0.0
+baseline,async-single,aux.pp_handoff,PP Handoff,0,0.0,5.276197128295898,5.276197128295898
+baseline,async-single,aux.sync_control,SYNC / Control,13,0.0,0.0,0.008125
+baseline,async-single,aux.unattributed,Unattributed / Background / Tail,1,0.0,0.0,0.000625
+baseline,async-serialized,attention.rmsnorm,Attention RMSNorm,0,0.45,0.0,0.45
+baseline,async-serialized,attention.q_projection,Q Projection,19550,0.064,0.0,12.28275
+baseline,async-serialized,attention.kv_projection,K/V Projection,4703,0.112,0.0,3.051375
+baseline,async-serialized,attention.qk,QK,95029,0.0,0.0,59.393125
+baseline,async-serialized,attention.sv,SV,90072,0.96,0.0,57.255
+baseline,async-serialized,attention.o_projection,O Projection,19121,0.0,10.552394256591796,22.5030192565918
+baseline,async-serialized,ffn.rmsnorm,FFN RMSNorm,0,0.45,0.0,0.45
+baseline,async-serialized,ffn.up_gate_projection,Up/Gate Projection,154130,0.0,0.0,96.33125
+baseline,async-serialized,ffn.down_projection,Down Projection,67439,0.0,10.552394256591796,52.701769256591795
+baseline,async-serialized,aux.rope_q,RoPE Q,0,3.136,0.0,3.136
+baseline,async-serialized,aux.rope_k,RoPE K,0,0.392,0.0,0.392
+baseline,async-serialized,aux.kv_update,KV Update,2561,0.0,0.0,1.600625
+baseline,async-serialized,aux.softmax,Softmax,0,97.968,0.0,97.968
+baseline,async-serialized,aux.flash_merge,FlashAttention Merge,0,0.0,0.0,0.0
+baseline,async-serialized,aux.score_transfer,Score Transfer,250140,0.0,0.0,156.3375
+baseline,async-serialized,aux.ffn_activation,FFN Activation,329,0.448,0.0,0.653625
+baseline,async-serialized,aux.attention_residual,Attention Residual,,0.0,0.0,0.0
+baseline,async-serialized,aux.ffn_residual,FFN Residual,,0.0,0.0,0.0
+baseline,async-serialized,aux.pp_handoff,PP Handoff,0,0.0,5.276197128295898,5.276197128295898
+baseline,async-serialized,aux.sync_control,SYNC / Control,13,0.0,0.0,0.008125
+baseline,async-serialized,aux.unattributed,Unattributed / Background / Tail,1,0.0,0.0,0.000625
+baseline,double,attention.rmsnorm,Attention RMSNorm,0,0.45,0.0,0.45
+baseline,double,attention.q_projection,Q Projection,15607,0.064,0.0,9.818375
+baseline,double,attention.kv_projection,K/V Projection,4549,0.112,0.0,2.955125
+baseline,double,attention.qk,QK,95091,0.0,0.0,59.431875
+baseline,double,attention.sv,SV,63247,0.96,0.0,40.489375
+baseline,double,attention.o_projection,O Projection,15598,0.0,10.552394256591796,20.301144256591797
+baseline,double,ffn.rmsnorm,FFN RMSNorm,0,0.45,0.0,0.45
+baseline,double,ffn.up_gate_projection,Up/Gate Projection,123941,0.0,0.0,77.463125
+baseline,double,ffn.down_projection,Down Projection,53331,0.0,10.552394256591796,43.8842692565918
+baseline,double,aux.rope_q,RoPE Q,0,3.136,0.0,3.136
+baseline,double,aux.rope_k,RoPE K,0,0.392,0.0,0.392
+baseline,double,aux.kv_update,KV Update,2424,0.0,0.0,1.515
+baseline,double,aux.softmax,Softmax,0,97.968,0.0,97.968
+baseline,double,aux.flash_merge,FlashAttention Merge,0,0.0,0.0,0.0
+baseline,double,aux.score_transfer,Score Transfer,250052,0.0,0.0,156.2825
+baseline,double,aux.ffn_activation,FFN Activation,329,0.448,0.0,0.653625
+baseline,double,aux.attention_residual,Attention Residual,,0.0,0.0,0.0
+baseline,double,aux.ffn_residual,FFN Residual,,0.0,0.0,0.0
+baseline,double,aux.pp_handoff,PP Handoff,0,0.0,5.276197128295898,5.276197128295898
+baseline,double,aux.sync_control,SYNC / Control,13,0.0,0.0,0.008125
+baseline,double,aux.unattributed,Unattributed / Background / Tail,1,0.0,0.0,0.000625
+full,legacy,attention.rmsnorm,Attention RMSNorm,0.0,0.45,0.0,0.45
+full,legacy,attention.q_projection,Q Projection,19640.0,0.064,0.0,12.339
+full,legacy,attention.kv_projection,K/V Projection,4750.0,0.112,0.0,3.08075
+full,legacy,attention.qk,QK,177013.0,0.0,0.0,110.633125
+full,legacy,attention.sv,SV,111635.0,0.96,0.0,70.731875
+full,legacy,attention.o_projection,O Projection,19515.0,0.0,10.552394256591796,22.7492692565918
+full,legacy,ffn.rmsnorm,FFN RMSNorm,0.0,0.45,0.0,0.45
+full,legacy,ffn.up_gate_projection,Up/Gate Projection,157871.0,0.0,0.0,98.669375
+full,legacy,ffn.down_projection,Down Projection,69177.0,0.0,10.552394256591796,53.788019256591795
+full,legacy,aux.rope_q,RoPE Q,0.0,3.136,0.0,3.136
+full,legacy,aux.rope_k,RoPE K,0.0,0.392,0.0,0.392
+full,legacy,aux.kv_update,KV Update,1403.0,0.0,0.0,0.876875
+full,legacy,aux.softmax,Softmax,0.0,25.908892561983475,0.0,25.908892561983475
+full,legacy,aux.flash_merge,FlashAttention Merge,0.0,0.015,0.0,0.015
+full,legacy,aux.score_transfer,Score Transfer,0.0,0.0,0.0,0.0
+full,legacy,aux.ffn_activation,FFN Activation,211.0,0.448,0.0,0.579875
+full,legacy,aux.attention_residual,Attention Residual,,0.0,0.0,0.0
+full,legacy,aux.ffn_residual,FFN Residual,,0.0,0.0,0.0
+full,legacy,aux.pp_handoff,PP Handoff,0.0,0.0,5.276197128295898,5.276197128295898
+full,legacy,aux.sync_control,SYNC / Control,,0.0,0.0,0.0
+full,legacy,aux.unattributed,Unattributed / Background / Tail,3190.0,0.0,0.0,1.99375
+full,async-single,attention.rmsnorm,Attention RMSNorm,0,0.45,0.0,0.45
+full,async-single,attention.q_projection,Q Projection,19550,0.064,0.0,12.28275
+full,async-single,attention.kv_projection,K/V Projection,4703,0.112,0.0,3.051375
+full,async-single,attention.qk,QK,183852,0.0,0.0,114.9075
+full,async-single,attention.sv,SV,113316,0.96,0.0,71.7825
+full,async-single,attention.o_projection,O Projection,19036,0.0,10.552394256591796,22.449894256591797
+full,async-single,ffn.rmsnorm,FFN RMSNorm,0,0.45,0.0,0.45
+full,async-single,ffn.up_gate_projection,Up/Gate Projection,153816,0.0,0.0,96.135
+full,async-single,ffn.down_projection,Down Projection,67430,0.0,10.552394256591796,52.69614425659179
+full,async-single,aux.rope_q,RoPE Q,0,3.136,0.0,3.136
+full,async-single,aux.rope_k,RoPE K,0,0.392,0.0,0.392
+full,async-single,aux.kv_update,KV Update,2561,0.0,0.0,1.600625
+full,async-single,aux.softmax,Softmax,0,25.908892561983475,0.0,25.908892561983475
+full,async-single,aux.flash_merge,FlashAttention Merge,0,0.015,0.0,0.015
+full,async-single,aux.score_transfer,Score Transfer,0,0.0,0.0,0.0
+full,async-single,aux.ffn_activation,FFN Activation,329,0.448,0.0,0.653625
+full,async-single,aux.attention_residual,Attention Residual,,0.0,0.0,0.0
+full,async-single,aux.ffn_residual,FFN Residual,,0.0,0.0,0.0
+full,async-single,aux.pp_handoff,PP Handoff,0,0.0,5.276197128295898,5.276197128295898
+full,async-single,aux.sync_control,SYNC / Control,5,0.0,0.0,0.003125
+full,async-single,aux.unattributed,Unattributed / Background / Tail,1,0.0,0.0,0.000625
+full,async-serialized,attention.rmsnorm,Attention RMSNorm,0,0.45,0.0,0.45
+full,async-serialized,attention.q_projection,Q Projection,19550,0.064,0.0,12.28275
+full,async-serialized,attention.kv_projection,K/V Projection,4703,0.112,0.0,3.051375
+full,async-serialized,attention.qk,QK,183852,0.0,0.0,114.9075
+full,async-serialized,attention.sv,SV,113316,0.96,0.0,71.7825
+full,async-serialized,attention.o_projection,O Projection,19036,0.0,10.552394256591796,22.449894256591797
+full,async-serialized,ffn.rmsnorm,FFN RMSNorm,0,0.45,0.0,0.45
+full,async-serialized,ffn.up_gate_projection,Up/Gate Projection,153816,0.0,0.0,96.135
+full,async-serialized,ffn.down_projection,Down Projection,67430,0.0,10.552394256591796,52.69614425659179
+full,async-serialized,aux.rope_q,RoPE Q,0,3.136,0.0,3.136
+full,async-serialized,aux.rope_k,RoPE K,0,0.392,0.0,0.392
+full,async-serialized,aux.kv_update,KV Update,2561,0.0,0.0,1.600625
+full,async-serialized,aux.softmax,Softmax,0,25.908892561983475,0.0,25.908892561983475
+full,async-serialized,aux.flash_merge,FlashAttention Merge,0,0.015,0.0,0.015
+full,async-serialized,aux.score_transfer,Score Transfer,0,0.0,0.0,0.0
+full,async-serialized,aux.ffn_activation,FFN Activation,329,0.448,0.0,0.653625
+full,async-serialized,aux.attention_residual,Attention Residual,,0.0,0.0,0.0
+full,async-serialized,aux.ffn_residual,FFN Residual,,0.0,0.0,0.0
+full,async-serialized,aux.pp_handoff,PP Handoff,0,0.0,5.276197128295898,5.276197128295898
+full,async-serialized,aux.sync_control,SYNC / Control,5,0.0,0.0,0.003125
+full,async-serialized,aux.unattributed,Unattributed / Background / Tail,1,0.0,0.0,0.000625
+full,double,attention.rmsnorm,Attention RMSNorm,0,0.45,0.0,0.45
+full,double,attention.q_projection,Q Projection,15607,0.064,0.0,9.818375
+full,double,attention.kv_projection,K/V Projection,4549,0.112,0.0,2.955125
+full,double,attention.qk,QK,183757,0.0,0.0,114.848125
+full,double,attention.sv,SV,113103,0.96,0.0,71.649375
+full,double,attention.o_projection,O Projection,15615,0.0,10.552394256591796,20.3117692565918
+full,double,ffn.rmsnorm,FFN RMSNorm,0,0.45,0.0,0.45
+full,double,ffn.up_gate_projection,Up/Gate Projection,123851,0.0,0.0,77.406875
+full,double,ffn.down_projection,Down Projection,53229,0.0,10.552394256591796,43.820519256591794
+full,double,aux.rope_q,RoPE Q,0,3.136,0.0,3.136
+full,double,aux.rope_k,RoPE K,0,0.392,0.0,0.392
+full,double,aux.kv_update,KV Update,2424,0.0,0.0,1.515
+full,double,aux.softmax,Softmax,0,25.908892561983475,0.0,25.908892561983475
+full,double,aux.flash_merge,FlashAttention Merge,0,0.015,0.0,0.015
+full,double,aux.score_transfer,Score Transfer,0,0.0,0.0,0.0
+full,double,aux.ffn_activation,FFN Activation,329,0.448,0.0,0.653625
+full,double,aux.attention_residual,Attention Residual,,0.0,0.0,0.0
+full,double,aux.ffn_residual,FFN Residual,,0.0,0.0,0.0
+full,double,aux.pp_handoff,PP Handoff,0,0.0,5.276197128295898,5.276197128295898
+full,double,aux.sync_control,SYNC / Control,5,0.0,0.0,0.003125
+full,double,aux.unattributed,Unattributed / Background / Tail,1,0.0,0.0,0.000625

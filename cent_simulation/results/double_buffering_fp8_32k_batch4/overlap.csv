@@ -1,0 +1,15 @@
+variant,profile,reference_channel,region_id,mac_context_gb_fill_interval_overlap_cycles,simultaneous_mac_step_and_gb_issue_clocks
+baseline,double,0,attention.kv_projection,277,16
+baseline,double,0,attention.o_projection,1850,4
+baseline,double,0,attention.q_projection,1935,39
+baseline,double,0,attention.qk,0,0
+baseline,double,0,attention.sv,14153,128
+baseline,double,0,ffn.down_projection,6823,16
+baseline,double,0,ffn.up_gate_projection,15484,67
+full,double,0,attention.kv_projection,277,16
+full,double,0,attention.o_projection,1991,16
+full,double,0,attention.q_projection,1935,39
+full,double,0,attention.qk,0,0
+full,double,0,attention.sv,0,0
+full,double,0,ffn.down_projection,7044,16
+full,double,0,ffn.up_gate_projection,15484,64
