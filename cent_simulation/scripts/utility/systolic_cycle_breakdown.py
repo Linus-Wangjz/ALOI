@@ -62,6 +62,8 @@ def systolic_trace_variant(source: pd.Series) -> str:
         variant += f"_flash_{int(source['Flash attention block size'])}"
     if str(source.get("Precision", "BF16")).upper() == "FP8":
         variant += "_fp8"
+    if _bool(source.get("Channel concurrency", False)):
+        variant += "_chconcurrent"
     return variant
 
 

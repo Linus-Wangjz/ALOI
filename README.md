@@ -26,16 +26,20 @@ Both use LPDDR4 **32 channels × x16, prefetch16, nBL=8, nCCD=2, 625 ps/clock**.
 | [Full](cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/full/summary.txt) | All four ON; FlashAttention block size 1024 | 564,405 | 411.070003 |
 
 These are per-block, per-batch-group results on one representative TP rank.
+The archived numbers and source hashes describe the retained original runs;
+they have not been regenerated after merging the remote phase-checkpoint and
+analysis updates or the active-queue fence fix.
 The [combined summary](cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/summary.txt)
 includes every kernel's PIM/PNM/CXL contributions, command counts, and command
 gap details. PIM kernel gaps include waits; they are attribution estimates,
 not isolated arithmetic timings. **Residual/EWADD arithmetic is not yet
 modeled or charged.** Softmax overlap and PNM/CXL retain legacy formulas.
 
-The `double-buffering` branch additionally implements the opt-in `AiMAsync`
+The `main` branch uses the single-buffer `AiM` profile. The `double-buffering`
+branch additionally implements the opt-in `AiMAsync`
 two-GB execution profile, selected by `--pim-double-buffering`. The reference
 directory above uses the single-buffer `AiM` profile. See the separate
-[double-buffer comparison](cent_simulation/results/double_buffering_fp8_32k_batch4/summary.txt)
+[double-buffer comparison](https://github.com/Linus-Wangjz/ALOI/blob/double-buffering/cent_simulation/results/double_buffering_fp8_32k_batch4/summary.txt)
 for that branch's results and ablations. New performance runs should explicitly
 enable the four default optimizations documented below; double buffering is a
 separate hardware profile.
@@ -50,8 +54,16 @@ Python infrastructure requires `pandas`, `matplotlib`, `torch`, and `scipy` pack
 Clone the repository recursively:
 
 ```bash
-git clone --recursive --branch double-buffering https://github.com/Linus-Wangjz/ALOI.git
+git clone --recursive https://github.com/Linus-Wangjz/ALOI.git
 cd ALOI
+```
+
+For the double-buffer execution profile, switch both the parent checkout and
+its pinned simulator before building:
+
+```bash
+git switch double-buffering
+git submodule update --init --recursive
 ```
 
 Install the Python packages locally or create a conda environment:

@@ -319,6 +319,8 @@ def rebuild_physical_energy(
             variant += f"_flash_{int(source['Flash attention block size'])}"
         if str(source.get("Precision", "BF16")) == "FP8":
             variant += "_fp8"
+        if _bool(source.get("Channel concurrency", False)):
+            variant += "_chconcurrent"
         main_log = (
             log_root / variant / "model_parallel_kv_head_main" / model
             / f"trace_{tp}_FC_devices_seqlen_{seqlen}.txt.log"

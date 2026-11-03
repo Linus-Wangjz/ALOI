@@ -5,12 +5,30 @@ from pathlib import Path
 from scripts.utility.systolic_cycle_breakdown import (
     command_cycle_components,
     select_critical_command_trace,
+    systolic_trace_variant,
     trace_recorder_config,
     wr_gb_phase_cycles,
 )
 
 
 class SystolicCycleBreakdownTest(unittest.TestCase):
+    def test_concurrent_fp8_trace_path_matches_run_sim(self):
+        from types import SimpleNamespace
+        import pandas as pd
+        import run_sim
+
+        source = pd.Series({
+            "Systolic dim": 4, "Batch size": 4,
+            "EWMUL PNM effective": True, "Flash attention": True,
+            "Flash attention block size": 1024, "Precision": "FP8",
+            "Channel concurrency": True,
+        })
+        args = SimpleNamespace(systolic_dim=4, batch_size=4, systolic_pim=True,
+                               ewmul_pnm=True, flash_attention=True,
+                               flash_attention_block_size=1024, precision="fp8",
+                               channel_concurrency=True)
+        self.assertEqual(systolic_trace_variant(source), run_sim.systolic_trace_variant(args))
+
     def test_command_components_close_to_memory_system_cycles(self):
         with tempfile.TemporaryDirectory() as directory:
             command_trace = Path(directory) / "trace.cmd.ch0"
