@@ -1,0 +1,42 @@
+Frontend:
+  impl: AiMTrace
+  clock_ratio: 1
+  
+  Translation:
+    impl: NoTranslation
+    max_addr: 2147483648
+              
+
+MemorySystem:
+  impl: AiMDRAM
+  clock_ratio: 1
+
+  DRAM:
+    impl: LPDDR4
+    org:
+      preset: LPDDR4_AiM_org
+      channel_width: 16
+    timing:
+      preset: LPDDR4_AiM_timing
+      nCCD: 2
+
+  Controller:
+    impl: AiM
+    clock_ratio: 1
+    Scheduler:
+      impl: FRFCFS
+    RefreshManager:
+      impl: AllBank
+    plugins:
+      - ControllerPlugin:
+          impl: DRAMTimingExporter
+          path: /home/linusw/Documents/Repo/ALOI/cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/e8a71551be43a1ce/ramulator/systolic_pim_4_batch_size_4_ewmul_pnm_1_fp8/model_parallel_kv_head_main/Llama2-70B/trace_2_FC_devices_seqlen_30976.txt.timing.yaml
+      - ControllerPlugin:
+          impl: TraceRecorder
+          path: /home/linusw/Documents/Repo/ALOI/cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/e8a71551be43a1ce/ramulator/systolic_pim_4_batch_size_4_ewmul_pnm_1_fp8/model_parallel_kv_head_main/Llama2-70B/trace_2_FC_devices_seqlen_30976.txt.cmd
+
+  AddrMapper:
+    impl: RoBaRaCoCh
+
+
+

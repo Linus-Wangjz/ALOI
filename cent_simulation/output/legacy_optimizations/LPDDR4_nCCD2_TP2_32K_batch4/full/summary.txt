@@ -1,0 +1,432 @@
+Llama2-70B legacy v0.0 cycle breakdown — LPDDR4 nCCD=2, TP=2, batch=4
+精度：FP8；PIM 阵列：4×32。
+DRAM interface: 32 channels × x16; device DQ=16; prefetch=16; transaction=32 B; nBL=8 clocks.
+Context window：32,768；实际 decode 长度：30,976。
+优化开关：EWMUL_PNM=True；FlashAttention=True（block=1024）；pipelined_softmax=True；channel_concurrency=True。
+范围：一个代表 rank 上一个 block 的 batch group；PP=16，未乘 80 层或 TP。
+参考周期：625 ps；下列周期均为该时钟的等效周期。
+整条 trace 的 PIM 实测周期：564,405。
+Legacy block 合计：411.070003 µs；等效周期 657,712.005。
+其中 PIM=352.753125 µs，PNM=31.935893 µs，CXL=26.380986 µs。
+每个输出 token 的摊销 block 时间：102.767501 µs（不是单请求端到端 token latency）。
+PIM 分项方法：legacy_tp_issued_gap_v1，参考 channel=15。
+PIM kernel 分项是估算归因，未观测 completion；PNM/CXL 是 legacy 公式。K/V、Up/Gate 保持融合。
+
+部分                                      PIM等效周期     PNM等效周期     CXL等效周期      合计(µs)    占block
+Attention RMSNorm                               0.000         720.000           0.000       0.450000      0.11%
+Q Projection                               19,640.000         102.400           0.000      12.339000      3.00%
+K/V Projection                              4,750.000         179.200           0.000       3.080750      0.75%
+QK                                        177,013.000           0.000           0.000     110.633125     26.91%
+SV                                        111,635.000       1,536.000           0.000      70.731875     17.21%
+O Projection                               19,515.000           0.000      16,883.831      22.749269      5.53%
+FFN RMSNorm                                     0.000         720.000           0.000       0.450000      0.11%
+Up/Gate Projection                        157,871.000           0.000           0.000      98.669375     24.00%
+Down Projection                            69,177.000           0.000      16,883.831      53.788019     13.08%
+RoPE Q                                          0.000       5,017.600           0.000       3.136000      0.76%
+RoPE K                                          0.000         627.200           0.000       0.392000      0.10%
+KV Update                                   1,403.000           0.000           0.000       0.876875      0.21%
+Softmax                                         0.000      41,454.228           0.000      25.908893      6.30%
+FlashAttention Merge                            0.000          24.000           0.000       0.015000      0.00%
+Score Transfer: 0；FlashAttention 未物化 score DRAM workspace，无对应读写命令。
+FFN Activation                                211.000         716.800           0.000       0.579875      0.14%
+Attention Residual: arithmetic 未建模；旧账本没有单独计时。
+FFN Residual: arithmetic 未建模；旧账本没有单独计时。
+PP Handoff                                      0.000           0.000       8,441.915       5.276197      1.28%
+Unattributed / Background / Tail            3,190.000           0.000           0.000       1.993750      0.49%
+
+逐 kernel 的 PIM / PNM / CXL 周期组成
+等效周期统一按 PIM 参考时钟换算；PNM formula cycles 使用其独立时钟。
+以下是已有总计的展开，不重复计时；未建模项不能解释为硬件耗时为零。
+
+Attention RMSNorm [attention.rmsnorm]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 900.000000 formula cycles × 0.5 ns = 450.000000 ns = 720.000000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：450.000000 ns = 720.000000 等效周期。
+
+Q Projection [attention.q_projection]
+  PIM: 19,640.000000 归属周期 × 0.625 ns = 12,275.000000 ns。
+  PNM: 128.000000 formula cycles × 0.5 ns = 64.000000 ns = 102.400000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：12,339.000000 ns = 19,742.400000 等效周期。
+
+K/V Projection [attention.kv_projection]
+  PIM: 4,750.000000 归属周期 × 0.625 ns = 2,968.750000 ns。
+  PNM: 224.000000 formula cycles × 0.5 ns = 112.000000 ns = 179.200000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：3,080.750000 ns = 4,929.200000 等效周期。
+
+QK [attention.qk]
+  PIM: 177,013.000000 归属周期 × 0.625 ns = 110,633.125000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：110,633.125000 ns = 177,013.000000 等效周期。
+
+SV [attention.sv]
+  PIM: 111,635.000000 归属周期 × 0.625 ns = 69,771.875000 ns。
+  PNM: 1,920.000000 formula cycles × 0.5 ns = 960.000000 ns = 1,536.000000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：70,731.875000 ns = 113,171.000000 等效周期。
+
+O Projection [attention.o_projection]
+  PIM: 19,515.000000 归属周期 × 0.625 ns = 12,196.875000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 10,552.394257 ns / 0.625 ns = 16,883.830811 等效周期（legacy 公式）。
+  Legacy 合计：22,749.269257 ns = 36,398.830811 等效周期。
+
+FFN RMSNorm [ffn.rmsnorm]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 900.000000 formula cycles × 0.5 ns = 450.000000 ns = 720.000000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：450.000000 ns = 720.000000 等效周期。
+
+Up/Gate Projection [ffn.up_gate_projection]
+  PIM: 157,871.000000 归属周期 × 0.625 ns = 98,669.375000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：98,669.375000 ns = 157,871.000000 等效周期。
+
+Down Projection [ffn.down_projection]
+  PIM: 69,177.000000 归属周期 × 0.625 ns = 43,235.625000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 10,552.394257 ns / 0.625 ns = 16,883.830811 等效周期（legacy 公式）。
+  Legacy 合计：53,788.019257 ns = 86,060.830811 等效周期。
+
+RoPE Q [aux.rope_q]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 6,272.000000 formula cycles × 0.5 ns = 3,136.000000 ns = 5,017.600000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：3,136.000000 ns = 5,017.600000 等效周期。
+
+RoPE K [aux.rope_k]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 784.000000 formula cycles × 0.5 ns = 392.000000 ns = 627.200000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：392.000000 ns = 627.200000 等效周期。
+
+KV Update [aux.kv_update]
+  PIM: 1,403.000000 归属周期 × 0.625 ns = 876.875000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：876.875000 ns = 1,403.000000 等效周期。
+
+Softmax [aux.softmax]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 51,817.785124 formula cycles × 0.5 ns = 25,908.892562 ns = 41,454.228099 等效周期。
+    完整 Softmax 工作：97,968.000000 ns；exposed：25,908.892562 ns；分析模型中的 overlap：72,059.107438 ns。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：25,908.892562 ns = 41,454.228099 等效周期。
+
+FlashAttention Merge [aux.flash_merge]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 30.000000 formula cycles × 0.5 ns = 15.000000 ns = 24.000000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：15.000000 ns = 24.000000 等效周期。
+
+Score Transfer [aux.score_transfer]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：0.000000 ns = 0.000000 等效周期。
+
+FFN Activation [aux.ffn_activation]
+  PIM: 211.000000 归属周期 × 0.625 ns = 131.875000 ns。
+  PNM: 896.000000 formula cycles × 0.5 ns = 448.000000 ns = 716.800000 等效周期。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：579.875000 ns = 927.800000 等效周期。
+
+Attention Residual [aux.attention_residual]
+  PIM: unmodeled；独立执行时间 unavailable。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：0.000000 ns = 0.000000 等效周期。
+
+FFN Residual [aux.ffn_residual]
+  PIM: unmodeled；独立执行时间 unavailable。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：0.000000 ns = 0.000000 等效周期。
+
+PP Handoff [aux.pp_handoff]
+  PIM: 0.000000 归属周期 × 0.625 ns = 0.000000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 5,276.197128 ns / 0.625 ns = 8,441.915405 等效周期（legacy 公式）。
+  Legacy 合计：5,276.197128 ns = 8,441.915405 等效周期。
+
+SYNC / Control [aux.sync_control]
+  PIM: unavailable；独立执行时间 unavailable。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：0.000000 ns = 0.000000 等效周期。
+
+Unattributed / Background / Tail [aux.unattributed]
+  PIM: 3,190.000000 归属周期 × 0.625 ns = 1,993.750000 ns。
+  PNM: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  CXL: 0.000000 ns / 0.625 ns = 0.000000 等效周期（legacy 公式）。
+  Legacy 合计：1,993.750000 ns = 3,190.000000 等效周期。
+
+PIM 发射事件间隔明细
+参考 channel=15；单位为 625 ps 的参考周期。
+下列明细展开上表的 PIM 分项，已经计入 block 总计，不再额外相加。
+间隔归给后一个发射事件；前置命令关联后续 terminal 所属部分。包含等待，不等同命令执行或 completion latency。
+STARTUP/TAIL 是区间记录，不是发射命令；刷新等未归属事件保留在 Unattributed 中。
+Resolved timing（cycles）：nCCD=2, nMODCH=32, nRCDRDMAC=49, nRFCab=288, nRPab=34, nRTP=12。
+
+Q Projection [attention.q_projection]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              11,324
+  WRGB：写入输入 GB                                       4,040
+  WRMAC8：初始化累加器，对应 WR_BIAS                              25
+  RDMAC8：读取结果                                            4
+  ACT / PRE                                          3,734
+  TMOD / CAS 等控制命令                                     513
+  PIM 合计                                            19,640
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                       66            2,748
+    ACT8-2                       66               66
+    CASRDMAC8                     4               59
+    CASWRGB                       8              256
+    CASWRMAC8                     1               32
+    MAC8                      4,144           11,324
+    PREA                         65              920
+    RDMAC8                        4                4
+    TMOD                         18              166
+    WRGB                        512            4,040
+    WRMAC8                        4               25
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48           66            3,168
+    MAC8                          2        4,078            8,156
+    以每条 nCCD=2 为参考预算：4,144 × 2 = 8,288；实际归属 11,324；差额 3,036。
+  Backend 合计（等效周期）：PIM=19,640.000 + PNM=102.400 + CXL=0.000 = 19,742.400。
+
+K/V Projection [attention.kv_projection]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                               2,808
+  WRGB：写入输入 GB                                       1,017
+  WRMAC8：初始化累加器，对应 WR_BIAS                              25
+  RDMAC8：读取结果                                            4
+  ACT / PRE                                            792
+  TMOD / CAS 等控制命令                                     104
+  PIM 合计                                             4,750
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                       16              544
+    ACT8-2                       16               16
+    CASRDMAC8                     4               59
+    CASWRGB                       1               32
+    CASWRMAC8                     1                9
+    MAC8                      1,036            2,808
+    PREA                         16              232
+    RDMAC8                        4                4
+    TMOD                          4                4
+    WRGB                        128            1,017
+    WRMAC8                        4               25
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48           16              768
+    MAC8                          2        1,020            2,040
+    以每条 nCCD=2 为参考预算：1,036 × 2 = 2,072；实际归属 2,808；差额 736。
+  Backend 合计（等效周期）：PIM=4,750.000 + PNM=179.200 + CXL=0.000 = 4,929.200。
+
+QK [attention.qk]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              89,418
+  WRGB：写入输入 GB                                      31,730
+  WRMAC8：初始化累加器，对应 WR_BIAS                           6,193
+  RDMAC8：读取结果                                          992
+  ACT / PRE                                         28,735
+  TMOD / CAS 等控制命令                                  19,945
+  PIM 合计                                           177,013
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                      499           17,672
+    ACT8-2                      499              499
+    CASRDMAC8                   992           14,633
+    CASWRGB                       2               64
+    CASWRMAC8                   249            2,287
+    MAC8                     33,232           89,418
+    PREA                        487           10,564
+    RDMAC8                      992              992
+    TMOD                        529            2,961
+    WRGB                      3,968           31,730
+    WRMAC8                      992            6,193
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48          499           23,952
+    MAC8                          2       32,733           65,466
+    以每条 nCCD=2 为参考预算：33,232 × 2 = 66,464；实际归属 89,418；差额 22,954。
+  Backend 合计（等效周期）：PIM=177,013.000 + PNM=0.000 + CXL=0.000 = 177,013.000。
+
+SV [attention.sv]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              43,408
+  WRGB：写入输入 GB                                      30,892
+  WRMAC8：初始化累加器，对应 WR_BIAS                           6,186
+  RDMAC8：读取结果                                          992
+  ACT / PRE                                          9,154
+  TMOD / CAS 等控制命令                                  21,003
+  PIM 合计                                           111,635
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                      127            4,544
+    ACT8-2                      127              127
+    CASRDMAC8                   992           14,632
+    CASWRGB                      12              384
+    CASWRMAC8                   250            2,296
+    MAC8                     16,976           43,408
+    PREA                        139            4,483
+    RDMAC8                      992              992
+    TMOD                        548            3,691
+    WRGB                      3,872           30,892
+    WRMAC8                      992            6,186
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48          126            6,048
+    MAC8                          2       16,728           33,456
+    TMOD                         32          122            3,904
+    以每条 nCCD=2 为参考预算：16,976 × 2 = 33,952；实际归属 43,408；差额 9,456。
+  Backend 合计（等效周期）：PIM=111,635.000 + PNM=1,536.000 + CXL=0.000 = 113,171.000。
+
+O Projection [attention.o_projection]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              11,278
+  WRGB：写入输入 GB                                       4,040
+  WRMAC8：初始化累加器，对应 WR_BIAS                              25
+  RDMAC8：读取结果                                            4
+  ACT / PRE                                          3,824
+  TMOD / CAS 等控制命令                                     344
+  PIM 合计                                            19,515
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                       66            2,750
+    ACT8-2                       66               66
+    CASRDMAC8                     4               59
+    CASWRGB                       8              256
+    CASWRMAC8                     1                9
+    MAC8                      4,144           11,278
+    PREA                         66            1,008
+    RDMAC8                        4                4
+    TMOD                         18               20
+    WRGB                        512            4,040
+    WRMAC8                        4               25
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48           65            3,120
+    MAC8                          2        4,079            8,158
+    以每条 nCCD=2 为参考预算：4,144 × 2 = 8,288；实际归属 11,278；差额 2,990。
+  Backend 合计（等效周期）：PIM=19,515.000 + PNM=0.000 + CXL=16,883.831 = 36,398.831。
+
+Up/Gate Projection [ffn.up_gate_projection]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              90,408
+  WRGB：写入输入 GB                                      32,341
+  WRMAC8：初始化累加器，对应 WR_BIAS                             100
+  RDMAC8：读取结果                                           16
+  ACT / PRE                                         32,515
+  TMOD / CAS 等控制命令                                   2,491
+  PIM 合计                                           157,871
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                      529           24,078
+    ACT8-2                      529              529
+    CASRDMAC8                    16              236
+    CASWRGB                      61            1,952
+    CASWRMAC8                     4               37
+    MAC8                     33,152           90,408
+    PREA                        529            7,908
+    RDMAC8                       16               16
+    TMOD                        132              266
+    WRGB                      4,096           32,341
+    WRMAC8                       16              100
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48          524           25,152
+    MAC8                          2       32,628           65,256
+    以每条 nCCD=2 为参考预算：33,152 × 2 = 66,304；实际归属 90,408；差额 24,104。
+  Backend 合计（等效周期）：PIM=157,871.000 + PNM=0.000 + CXL=0.000 = 157,871.000。
+
+Down Projection [ffn.down_projection]
+  归到这些发射事件的时间间隔                         周期
+  MAC8                                              39,634
+  WRGB：写入输入 GB                                      14,140
+  WRMAC8：初始化累加器，对应 WR_BIAS                              25
+  RDMAC8：读取结果                                            4
+  ACT / PRE                                         14,159
+  TMOD / CAS 等控制命令                                   1,215
+  PIM 合计                                            69,177
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                      233           10,460
+    ACT8-2                      233              233
+    CASRDMAC8                     4               59
+    CASWRGB                      28              896
+    CASWRMAC8                     1               11
+    MAC8                     14,504           39,634
+    PREA                        233            3,466
+    RDMAC8                        4                4
+    TMOD                         58              249
+    WRGB                      1,792           14,140
+    WRMAC8                        4               25
+  MAC8 前的发射间隔分布：
+    前一发射命令           单次间隔        区间数         累计周期
+    ACT8-2                       48          231           11,088
+    MAC8                          2       14,273           28,546
+    以每条 nCCD=2 为参考预算：14,504 × 2 = 29,008；实际归属 39,634；差额 10,626。
+  Backend 合计（等效周期）：PIM=69,177.000 + PNM=0.000 + CXL=16,883.831 = 86,060.831。
+
+KV Update [aux.kv_update]
+  归到这些发射事件的时间间隔                         周期
+  ACT / PRE                                            809
+  TMOD / CAS 等控制命令                                     163
+  WR：DRAM 写入                                           431
+  PIM 合计                                             1,403
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT-1                        37              505
+    ACT-2                        36               36
+    CASWR                        12              117
+    PRE                          35              213
+    PREA                          1               55
+    TMOD                          3               46
+    WR                           48              431
+  Backend 合计（等效周期）：PIM=1,403.000 + PNM=0.000 + CXL=0.000 = 1,403.000。
+
+FFN Activation [aux.ffn_activation]
+  归到这些发射事件的时间间隔                         周期
+  ACT / PRE                                             67
+  AF8：阵列内 activation                                   116
+  RDAF8：读取 activation 结果                                 8
+  TMOD / CAS 等控制命令                                      20
+  PIM 合计                                               211
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    ACT8-1                        1               34
+    ACT8-2                        1                1
+    AF8                           8              116
+    PREA                          1               32
+    RDAF8                         8                8
+    TMOD                          4               20
+  Backend 合计（等效周期）：PIM=211.000 + PNM=716.800 + CXL=0.000 = 927.800。
+
+Unattributed / Background / Tail [aux.unattributed]
+  归到这些发射事件的时间间隔                         周期
+  TMOD / CAS 等控制命令                                     118
+  REFab                                              3,060
+  STARTUP：首次发射前                                          1
+  TAIL：末次发射后                                            11
+  PIM 合计                                             3,190
+  原始命令明细：
+    命令                  发射事件数         归属周期
+    CASRDAF8                      8              118
+    REFab                        90            3,060
+    STARTUP                       0                1
+    TAIL                          0               11
+  Backend 合计（等效周期）：PIM=3,190.000 + PNM=0.000 + CXL=0.000 = 3,190.000。
+
+全部 PIM 事件间隔合计：564,405；整条 trace：564,405；差额：0 cycles。
+
+对账差额（ns）：{"block": 0.0, "cxl": 3.637978807091713e-12, "pim": 0.0, "pnm": 0.0}
+Source revisions/provenance 与输入 SHA256 见 run_manifest.json。
+SYNC/control 的独立完成时间 unavailable；其共享等待可能包含在 issued gaps 中。

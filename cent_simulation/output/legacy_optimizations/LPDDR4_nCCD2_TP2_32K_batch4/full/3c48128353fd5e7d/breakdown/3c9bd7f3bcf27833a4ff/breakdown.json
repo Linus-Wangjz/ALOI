@@ -1,0 +1,3531 @@
+{
+  "case": {
+    "array_height": 4,
+    "array_width": 32,
+    "batch_size": 4,
+    "channel_concurrency": true,
+    "context_window": 32768,
+    "dram_organization": {
+      "channel_width_bits": 16,
+      "channels": 32,
+      "dq_bits": 16,
+      "prefetch": 16,
+      "transaction_bytes": 32
+    },
+    "dram_power_label": "3c48128353fd5e7d",
+    "dram_timing_impl": "LPDDR4",
+    "ewmul_pnm": true,
+    "flash_attention": true,
+    "flash_attention_block_size": 1024,
+    "model": "Llama2-70B",
+    "nBL": 8,
+    "nCCD": 2,
+    "pim_element_bits": 8,
+    "pipelined_softmax": true,
+    "pp": 16,
+    "precision": "FP8",
+    "sequence_length": 30976,
+    "tp": 2
+  },
+  "diagnostics": [
+    "PIM region allocations are estimates; no host/kernel completion timestamps exist",
+    "Issued-gap ownership uses a validated emission protocol and one reference channel; shared stalls are not a unique causal attribution",
+    "PNM/CXL retain legacy formulas; residual EWADD arithmetic is unmodeled",
+    "FP8 PIM does not change the legacy 16-element PNM/BF16 partial-vector formulas"
+  ],
+  "estimator": {
+    "completion_observed": false,
+    "id": "legacy_tp_issued_gap_v1",
+    "policy": "following issued-event/terminal gap ownership; prerequisites look ahead; background/startup/tail separate",
+    "reference_channel": 15,
+    "service_pools_cycles": {},
+    "timing_cycles": {
+      "nCCD": 2.0,
+      "nMODCH": 32.0,
+      "nRCDRDMAC": 49.0,
+      "nRFCab": 288.0,
+      "nRPab": 34.0,
+      "nRTP": 12.0
+    }
+  },
+  "full_run_totals": {
+    "block_latency_ns": 411070.003203463,
+    "cxl_latency_ns": 26380.985641479492,
+    "per_output_token_amortized_ns": 102767.50080086575,
+    "pim_latency_ns": 352753.125,
+    "pim_native_cycles": 564405,
+    "pnm_exposed_latency_ns": 31935.892561983474,
+    "reference_equivalent_cycles": 657712.0051255408
+  },
+  "legacy_framework_version": "0.0",
+  "method": "postprocess_estimate",
+  "profile_schema_version": "0.1",
+  "reconciliation_residuals_ns": {
+    "block": 0.0,
+    "cxl": 3.637978807091713e-12,
+    "pim": 0.0,
+    "pnm": 0.0
+  },
+  "reference_clock_period_ps": 625.0,
+  "regions": [
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 500.0,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 450.0,
+          "first_issue_cycle": null,
+          "formula_cycles": 900.0,
+          "full_work_duration_ns": 450.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 450.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 720.0
+        }
+      },
+      "command_counts": {},
+      "display_name": "Attention RMSNorm",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 450.0,
+      "logical_members": [
+        "rmsnorm"
+      ],
+      "main_or_auxiliary": "main",
+      "pim_issued_gap_details": null,
+      "reference_equivalent_cycles": 720.0,
+      "region_id": "attention.rmsnorm",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 12275.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 12275.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 12275.0,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 19640.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 500.0,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 64.0,
+          "first_issue_cycle": null,
+          "formula_cycles": 128.0,
+          "full_work_duration_ns": 64.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 64.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 102.4
+        }
+      },
+      "command_counts": {
+        "MAC_ABK": 80,
+        "RD_MAC": 4,
+        "WR_BIAS": 4,
+        "WR_GB": 8
+      },
+      "display_name": "Q Projection",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 12339.0,
+      "logical_members": [
+        "q"
+      ],
+      "main_or_auxiliary": "main",
+      "pim_issued_gap_details": {
+        "commands": [
+          {
+            "command": "ACT8-1",
+            "gap_cycles": 2748,
+            "issued_event_count": 66,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 34,
+                "interval_count": 62,
+                "previous_command": "PREA"
+              },
+              {
+                "gap_cycles": 288,
+                "interval_count": 2,
+                "previous_command": "REFab"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 2,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "ACT8-2",
+            "gap_cycles": 66,
+            "issued_event_count": 66,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 66,
+                "previous_command": "ACT8-1"
+              }
+            ]
+          },
+          {
+            "command": "CASRDMAC8",
+            "gap_cycles": 59,
+            "issued_event_count": 4,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 9,
+                "interval_count": 3,
+                "previous_command": "RDMAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 1,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "CASWRGB",
+            "gap_cycles": 256,
+            "issued_event_count": 8,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 32,
+                "interval_count": 8,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "CASWRMAC8",
+            "gap_cycles": 32,
+            "issued_event_count": 1,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 32,
+                "interval_count": 1,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "MAC8",
+            "gap_cycles": 11324,
+            "issued_event_count": 4144,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 48,
+                "interval_count": 66,
+                "previous_command": "ACT8-2"
+              },
+              {
+                "gap_cycles": 2,
+                "interval_count": 4078,
+                "previous_command": "MAC8"
+              }
+            ]
+          },
+          {
+            "command": "PREA",
+            "gap_cycles": 920,
+            "issued_event_count": 65,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 12,
+                "interval_count": 58,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 7,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "RDMAC8",
+            "gap_cycles": 4,
+            "issued_event_count": 4,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 4,
+                "previous_command": "CASRDMAC8"
+              }
+            ]
+          },
+          {
+            "command": "TMOD",
+            "gap_cycles": 166,
+            "issued_event_count": 18,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 8,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 1,
+                "previous_command": "REFab"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 7,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 1,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 142,
+                "interval_count": 1,
+                "previous_command": "WRGB"
+              }
+            ]
+          },
+          {
+            "command": "WRGB",
+            "gap_cycles": 4040,
+            "issued_event_count": 512,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 8,
+                "previous_command": "CASWRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 503,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 1,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          },
+          {
+            "command": "WRMAC8",
+            "gap_cycles": 25,
+            "issued_event_count": 4,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 1,
+                "previous_command": "CASWRMAC8"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 3,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          }
+        ],
+        "total_gap_cycles": 19640
+      },
+      "reference_equivalent_cycles": 19742.4,
+      "region_id": "attention.q_projection",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 2968.75,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 2968.75,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 2968.75,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 4750.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 500.0,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 112.0,
+          "first_issue_cycle": null,
+          "formula_cycles": 224.0,
+          "full_work_duration_ns": 112.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 112.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 179.2
+        }
+      },
+      "command_counts": {
+        "MAC_ABK": 20,
+        "RD_MAC": 4,
+        "WR_BIAS": 4,
+        "WR_GB": 2
+      },
+      "display_name": "K/V Projection",
+      "fusion": true,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 3080.75,
+      "logical_members": [
+        "k",
+        "v"
+      ],
+      "main_or_auxiliary": "main",
+      "pim_issued_gap_details": {
+        "commands": [
+          {
+            "command": "ACT8-1",
+            "gap_cycles": 544,
+            "issued_event_count": 16,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 34,
+                "interval_count": 16,
+                "previous_command": "PREA"
+              }
+            ]
+          },
+          {
+            "command": "ACT8-2",
+            "gap_cycles": 16,
+            "issued_event_count": 16,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 16,
+                "previous_command": "ACT8-1"
+              }
+            ]
+          },
+          {
+            "command": "CASRDMAC8",
+            "gap_cycles": 59,
+            "issued_event_count": 4,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 9,
+                "interval_count": 3,
+                "previous_command": "RDMAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 1,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "CASWRGB",
+            "gap_cycles": 32,
+            "issued_event_count": 1,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 32,
+                "interval_count": 1,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "CASWRMAC8",
+            "gap_cycles": 9,
+            "issued_event_count": 1,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 9,
+                "interval_count": 1,
+                "previous_command": "RDMAC8"
+              }
+            ]
+          },
+          {
+            "command": "MAC8",
+            "gap_cycles": 2808,
+            "issued_event_count": 1036,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 48,
+                "interval_count": 16,
+                "previous_command": "ACT8-2"
+              },
+              {
+                "gap_cycles": 2,
+                "interval_count": 1020,
+                "previous_command": "MAC8"
+              }
+            ]
+          },
+          {
+            "command": "PREA",
+            "gap_cycles": 232,
+            "issued_event_count": 16,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 12,
+                "interval_count": 14,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 2,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "RDMAC8",
+            "gap_cycles": 4,
+            "issued_event_count": 4,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 4,
+                "previous_command": "CASRDMAC8"
+              }
+            ]
+          },
+          {
+            "command": "TMOD",
+            "gap_cycles": 4,
+            "issued_event_count": 4,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 2,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 2,
+                "previous_command": "WRGB"
+              }
+            ]
+          },
+          {
+            "command": "WRGB",
+            "gap_cycles": 1017,
+            "issued_event_count": 128,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 1,
+                "previous_command": "CASWRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 126,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 1,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          },
+          {
+            "command": "WRMAC8",
+            "gap_cycles": 25,
+            "issued_event_count": 4,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 1,
+                "previous_command": "CASWRMAC8"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 3,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          }
+        ],
+        "total_gap_cycles": 4750
+      },
+      "reference_equivalent_cycles": 4929.2,
+      "region_id": "attention.kv_projection",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 110633.125,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 110633.125,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 110633.125,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 177013.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        }
+      },
+      "command_counts": {
+        "MAC_ABK": 992,
+        "RD_MAC": 992,
+        "WR_BIAS": 992,
+        "WR_GB": 248
+      },
+      "display_name": "QK",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 110633.125,
+      "logical_members": [
+        "qk"
+      ],
+      "main_or_auxiliary": "main",
+      "pim_issued_gap_details": {
+        "commands": [
+          {
+            "command": "ACT8-1",
+            "gap_cycles": 17672,
+            "issued_event_count": 499,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 34,
+                "interval_count": 468,
+                "previous_command": "PREA"
+              },
+              {
+                "gap_cycles": 288,
+                "interval_count": 3,
+                "previous_command": "REFab"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 28,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "ACT8-2",
+            "gap_cycles": 499,
+            "issued_event_count": 499,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 499,
+                "previous_command": "ACT8-1"
+              }
+            ]
+          },
+          {
+            "command": "CASRDMAC8",
+            "gap_cycles": 14633,
+            "issued_event_count": 992,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 9,
+                "interval_count": 743,
+                "previous_command": "RDMAC8"
+              },
+              {
+                "gap_cycles": 10,
+                "interval_count": 1,
+                "previous_command": "RDMAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 248,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "CASWRGB",
+            "gap_cycles": 64,
+            "issued_event_count": 2,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 32,
+                "interval_count": 2,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "CASWRMAC8",
+            "gap_cycles": 2287,
+            "issued_event_count": 249,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 9,
+                "interval_count": 247,
+                "previous_command": "RDMAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 2,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "MAC8",
+            "gap_cycles": 89418,
+            "issued_event_count": 33232,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 48,
+                "interval_count": 499,
+                "previous_command": "ACT8-2"
+              },
+              {
+                "gap_cycles": 2,
+                "interval_count": 32733,
+                "previous_command": "MAC8"
+              }
+            ]
+          },
+          {
+            "command": "PREA",
+            "gap_cycles": 10564,
+            "issued_event_count": 487,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 12,
+                "interval_count": 251,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 236,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "RDMAC8",
+            "gap_cycles": 992,
+            "issued_event_count": 992,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 992,
+                "previous_command": "CASRDMAC8"
+              }
+            ]
+          },
+          {
+            "command": "TMOD",
+            "gap_cycles": 2961,
+            "issued_event_count": 529,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 248,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 16,
+                "previous_command": "REFab"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 13,
+                "previous_command": "TMOD"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 1,
+                "previous_command": "WR"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 220,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 5,
+                "interval_count": 2,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 62,
+                "interval_count": 25,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 126,
+                "interval_count": 1,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 182,
+                "interval_count": 2,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 3,
+                "interval_count": 1,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          },
+          {
+            "command": "WRGB",
+            "gap_cycles": 31730,
+            "issued_event_count": 3968,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 2,
+                "previous_command": "CASWRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 3718,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 248,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          },
+          {
+            "command": "WRMAC8",
+            "gap_cycles": 6193,
+            "issued_event_count": 992,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 249,
+                "previous_command": "CASWRMAC8"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 743,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          }
+        ],
+        "total_gap_cycles": 177013
+      },
+      "reference_equivalent_cycles": 177013.0,
+      "region_id": "attention.qk",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 69771.875,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 69771.875,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 69771.875,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 111635.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 500.0,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 960.0,
+          "first_issue_cycle": null,
+          "formula_cycles": 1920.0,
+          "full_work_duration_ns": 960.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 960.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 1536.0
+        }
+      },
+      "command_counts": {
+        "MAC_ABK": 744,
+        "RD_MAC": 992,
+        "WR_BIAS": 992,
+        "WR_GB": 248
+      },
+      "display_name": "SV",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 70731.875,
+      "logical_members": [
+        "sv"
+      ],
+      "main_or_auxiliary": "main",
+      "pim_issued_gap_details": {
+        "commands": [
+          {
+            "command": "ACT8-1",
+            "gap_cycles": 4544,
+            "issued_event_count": 127,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 34,
+                "interval_count": 112,
+                "previous_command": "PREA"
+              },
+              {
+                "gap_cycles": 288,
+                "interval_count": 1,
+                "previous_command": "REFab"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 14,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "ACT8-2",
+            "gap_cycles": 127,
+            "issued_event_count": 127,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 127,
+                "previous_command": "ACT8-1"
+              }
+            ]
+          },
+          {
+            "command": "CASRDMAC8",
+            "gap_cycles": 14632,
+            "issued_event_count": 992,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 9,
+                "interval_count": 744,
+                "previous_command": "RDMAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 248,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "CASWRGB",
+            "gap_cycles": 384,
+            "issued_event_count": 12,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 32,
+                "interval_count": 12,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "CASWRMAC8",
+            "gap_cycles": 2296,
+            "issued_event_count": 250,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 9,
+                "interval_count": 248,
+                "previous_command": "RDMAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 2,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "MAC8",
+            "gap_cycles": 43408,
+            "issued_event_count": 16976,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 48,
+                "interval_count": 126,
+                "previous_command": "ACT8-2"
+              },
+              {
+                "gap_cycles": 2,
+                "interval_count": 16728,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 122,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "PREA",
+            "gap_cycles": 4483,
+            "issued_event_count": 139,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 67,
+                "interval_count": 1,
+                "previous_command": "ACT8-2"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 138,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "RDMAC8",
+            "gap_cycles": 992,
+            "issued_event_count": 992,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 992,
+                "previous_command": "CASRDMAC8"
+              }
+            ]
+          },
+          {
+            "command": "TMOD",
+            "gap_cycles": 3691,
+            "issued_event_count": 548,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 248,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 26,
+                "previous_command": "REFab"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 12,
+                "previous_command": "TMOD"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 234,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 3,
+                "interval_count": 10,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 7,
+                "interval_count": 1,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 1,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 110,
+                "interval_count": 2,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 206,
+                "interval_count": 9,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 214,
+                "interval_count": 1,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 230,
+                "interval_count": 2,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 3,
+                "interval_count": 2,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          },
+          {
+            "command": "WRGB",
+            "gap_cycles": 30892,
+            "issued_event_count": 3872,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 12,
+                "previous_command": "CASWRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 3612,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 248,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          },
+          {
+            "command": "WRMAC8",
+            "gap_cycles": 6186,
+            "issued_event_count": 992,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 250,
+                "previous_command": "CASWRMAC8"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 742,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          }
+        ],
+        "total_gap_cycles": 111635
+      },
+      "reference_equivalent_cycles": 113171.0,
+      "region_id": "attention.sv",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 10552.394256591797,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 10552.394256591797,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 10552.394256591797,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 16883.830810546875
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 12196.875,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 12196.875,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 12196.875,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 19515.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        }
+      },
+      "command_counts": {
+        "MAC_ABK": 80,
+        "RD_MAC": 4,
+        "WR_BIAS": 4,
+        "WR_GB": 8
+      },
+      "display_name": "O Projection",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 22749.269256591797,
+      "logical_members": [
+        "o"
+      ],
+      "main_or_auxiliary": "main",
+      "pim_issued_gap_details": {
+        "commands": [
+          {
+            "command": "ACT8-1",
+            "gap_cycles": 2750,
+            "issued_event_count": 66,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 34,
+                "interval_count": 63,
+                "previous_command": "PREA"
+              },
+              {
+                "gap_cycles": 288,
+                "interval_count": 2,
+                "previous_command": "REFab"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 1,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "ACT8-2",
+            "gap_cycles": 66,
+            "issued_event_count": 66,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 66,
+                "previous_command": "ACT8-1"
+              }
+            ]
+          },
+          {
+            "command": "CASRDMAC8",
+            "gap_cycles": 59,
+            "issued_event_count": 4,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 9,
+                "interval_count": 3,
+                "previous_command": "RDMAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 1,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "CASWRGB",
+            "gap_cycles": 256,
+            "issued_event_count": 8,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 32,
+                "interval_count": 8,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "CASWRMAC8",
+            "gap_cycles": 9,
+            "issued_event_count": 1,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 9,
+                "interval_count": 1,
+                "previous_command": "RDMAC8"
+              }
+            ]
+          },
+          {
+            "command": "MAC8",
+            "gap_cycles": 11278,
+            "issued_event_count": 4144,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 48,
+                "interval_count": 65,
+                "previous_command": "ACT8-2"
+              },
+              {
+                "gap_cycles": 2,
+                "interval_count": 4079,
+                "previous_command": "MAC8"
+              }
+            ]
+          },
+          {
+            "command": "PREA",
+            "gap_cycles": 1008,
+            "issued_event_count": 66,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 67,
+                "interval_count": 1,
+                "previous_command": "ACT8-2"
+              },
+              {
+                "gap_cycles": 12,
+                "interval_count": 56,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 13,
+                "interval_count": 1,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 8,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "RDMAC8",
+            "gap_cycles": 4,
+            "issued_event_count": 4,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 4,
+                "previous_command": "CASRDMAC8"
+              }
+            ]
+          },
+          {
+            "command": "TMOD",
+            "gap_cycles": 20,
+            "issued_event_count": 18,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 8,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 1,
+                "previous_command": "REFab"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 8,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 3,
+                "interval_count": 1,
+                "previous_command": "WRGB"
+              }
+            ]
+          },
+          {
+            "command": "WRGB",
+            "gap_cycles": 4040,
+            "issued_event_count": 512,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 8,
+                "previous_command": "CASWRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 503,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 1,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          },
+          {
+            "command": "WRMAC8",
+            "gap_cycles": 25,
+            "issued_event_count": 4,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 1,
+                "previous_command": "CASWRMAC8"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 3,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          }
+        ],
+        "total_gap_cycles": 19515
+      },
+      "reference_equivalent_cycles": 36398.830810546875,
+      "region_id": "attention.o_projection",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 500.0,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 450.0,
+          "first_issue_cycle": null,
+          "formula_cycles": 900.0,
+          "full_work_duration_ns": 450.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 450.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 720.0
+        }
+      },
+      "command_counts": {},
+      "display_name": "FFN RMSNorm",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 450.0,
+      "logical_members": [
+        "rmsnorm"
+      ],
+      "main_or_auxiliary": "main",
+      "pim_issued_gap_details": null,
+      "reference_equivalent_cycles": 720.0,
+      "region_id": "ffn.rmsnorm",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 98669.375,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 98669.375,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 98669.375,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 157871.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        }
+      },
+      "command_counts": {
+        "MAC_ABK": 640,
+        "RD_MAC": 16,
+        "WR_BIAS": 16,
+        "WR_GB": 64
+      },
+      "display_name": "Up/Gate Projection",
+      "fusion": true,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 98669.375,
+      "logical_members": [
+        "up",
+        "gate"
+      ],
+      "main_or_auxiliary": "main",
+      "pim_issued_gap_details": {
+        "commands": [
+          {
+            "command": "ACT8-1",
+            "gap_cycles": 24078,
+            "issued_event_count": 529,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 34,
+                "interval_count": 503,
+                "previous_command": "PREA"
+              },
+              {
+                "gap_cycles": 288,
+                "interval_count": 24,
+                "previous_command": "REFab"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 2,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "ACT8-2",
+            "gap_cycles": 529,
+            "issued_event_count": 529,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 529,
+                "previous_command": "ACT8-1"
+              }
+            ]
+          },
+          {
+            "command": "CASRDMAC8",
+            "gap_cycles": 236,
+            "issued_event_count": 16,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 9,
+                "interval_count": 12,
+                "previous_command": "RDMAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 4,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "CASWRGB",
+            "gap_cycles": 1952,
+            "issued_event_count": 61,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 32,
+                "interval_count": 61,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "CASWRMAC8",
+            "gap_cycles": 37,
+            "issued_event_count": 4,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 9,
+                "interval_count": 3,
+                "previous_command": "RDMAC8"
+              },
+              {
+                "gap_cycles": 10,
+                "interval_count": 1,
+                "previous_command": "RDMAC8"
+              }
+            ]
+          },
+          {
+            "command": "MAC8",
+            "gap_cycles": 90408,
+            "issued_event_count": 33152,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 48,
+                "interval_count": 524,
+                "previous_command": "ACT8-2"
+              },
+              {
+                "gap_cycles": 2,
+                "interval_count": 32628,
+                "previous_command": "MAC8"
+              }
+            ]
+          },
+          {
+            "command": "PREA",
+            "gap_cycles": 7908,
+            "issued_event_count": 529,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 67,
+                "interval_count": 5,
+                "previous_command": "ACT8-2"
+              },
+              {
+                "gap_cycles": 12,
+                "interval_count": 459,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 17,
+                "interval_count": 1,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 64,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "RDMAC8",
+            "gap_cycles": 16,
+            "issued_event_count": 16,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 16,
+                "previous_command": "CASRDMAC8"
+              }
+            ]
+          },
+          {
+            "command": "TMOD",
+            "gap_cycles": 266,
+            "issued_event_count": 132,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 64,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 2,
+                "previous_command": "REFab"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 1,
+                "previous_command": "TMOD"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 63,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 3,
+                "interval_count": 1,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 102,
+                "interval_count": 1,
+                "previous_command": "WRGB"
+              }
+            ]
+          },
+          {
+            "command": "WRGB",
+            "gap_cycles": 32341,
+            "issued_event_count": 4096,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 61,
+                "previous_command": "CASWRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 4031,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 4,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          },
+          {
+            "command": "WRMAC8",
+            "gap_cycles": 100,
+            "issued_event_count": 16,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 4,
+                "previous_command": "CASWRMAC8"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 12,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          }
+        ],
+        "total_gap_cycles": 157871
+      },
+      "reference_equivalent_cycles": 157871.0,
+      "region_id": "ffn.up_gate_projection",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 10552.394256591797,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 10552.394256591797,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 10552.394256591797,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 16883.830810546875
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 43235.625,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 43235.625,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 43235.625,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 69177.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        }
+      },
+      "command_counts": {
+        "MAC_ABK": 280,
+        "RD_MAC": 4,
+        "WR_BIAS": 4,
+        "WR_GB": 28
+      },
+      "display_name": "Down Projection",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 53788.0192565918,
+      "logical_members": [
+        "down"
+      ],
+      "main_or_auxiliary": "main",
+      "pim_issued_gap_details": {
+        "commands": [
+          {
+            "command": "ACT8-1",
+            "gap_cycles": 10460,
+            "issued_event_count": 233,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 34,
+                "interval_count": 222,
+                "previous_command": "PREA"
+              },
+              {
+                "gap_cycles": 288,
+                "interval_count": 10,
+                "previous_command": "REFab"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 1,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "ACT8-2",
+            "gap_cycles": 233,
+            "issued_event_count": 233,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 233,
+                "previous_command": "ACT8-1"
+              }
+            ]
+          },
+          {
+            "command": "CASRDMAC8",
+            "gap_cycles": 59,
+            "issued_event_count": 4,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 9,
+                "interval_count": 3,
+                "previous_command": "RDMAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 1,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "CASWRGB",
+            "gap_cycles": 896,
+            "issued_event_count": 28,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 32,
+                "interval_count": 28,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "CASWRMAC8",
+            "gap_cycles": 11,
+            "issued_event_count": 1,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 11,
+                "interval_count": 1,
+                "previous_command": "RDAF8"
+              }
+            ]
+          },
+          {
+            "command": "MAC8",
+            "gap_cycles": 39634,
+            "issued_event_count": 14504,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 48,
+                "interval_count": 231,
+                "previous_command": "ACT8-2"
+              },
+              {
+                "gap_cycles": 2,
+                "interval_count": 14273,
+                "previous_command": "MAC8"
+              }
+            ]
+          },
+          {
+            "command": "PREA",
+            "gap_cycles": 3466,
+            "issued_event_count": 233,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 67,
+                "interval_count": 2,
+                "previous_command": "ACT8-2"
+              },
+              {
+                "gap_cycles": 12,
+                "interval_count": 203,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 28,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "RDMAC8",
+            "gap_cycles": 4,
+            "issued_event_count": 4,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 4,
+                "previous_command": "CASRDMAC8"
+              }
+            ]
+          },
+          {
+            "command": "TMOD",
+            "gap_cycles": 249,
+            "issued_event_count": 58,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 28,
+                "previous_command": "MAC8"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 1,
+                "previous_command": "REFab"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 27,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 3,
+                "interval_count": 1,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 190,
+                "interval_count": 1,
+                "previous_command": "WRGB"
+              }
+            ]
+          },
+          {
+            "command": "WRGB",
+            "gap_cycles": 14140,
+            "issued_event_count": 1792,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 28,
+                "previous_command": "CASWRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 1763,
+                "previous_command": "WRGB"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 1,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          },
+          {
+            "command": "WRMAC8",
+            "gap_cycles": 25,
+            "issued_event_count": 4,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 1,
+                "previous_command": "CASWRMAC8"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 3,
+                "previous_command": "WRMAC8"
+              }
+            ]
+          }
+        ],
+        "total_gap_cycles": 69177
+      },
+      "reference_equivalent_cycles": 86060.83081054688,
+      "region_id": "ffn.down_projection",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 500.0,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 3136.0,
+          "first_issue_cycle": null,
+          "formula_cycles": 6272.0,
+          "full_work_duration_ns": 3136.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 3136.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 5017.6
+        }
+      },
+      "command_counts": {},
+      "display_name": "RoPE Q",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 3136.0,
+      "logical_members": [
+        "rope_q"
+      ],
+      "main_or_auxiliary": "auxiliary",
+      "pim_issued_gap_details": null,
+      "reference_equivalent_cycles": 5017.6,
+      "region_id": "aux.rope_q",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 500.0,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 392.0,
+          "first_issue_cycle": null,
+          "formula_cycles": 784.0,
+          "full_work_duration_ns": 392.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 392.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 627.2
+        }
+      },
+      "command_counts": {},
+      "display_name": "RoPE K",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 392.0,
+      "logical_members": [
+        "rope_k"
+      ],
+      "main_or_auxiliary": "auxiliary",
+      "pim_issued_gap_details": null,
+      "reference_equivalent_cycles": 627.2,
+      "region_id": "aux.rope_k",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 876.875,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 876.875,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 876.875,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 1403.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        }
+      },
+      "command_counts": {
+        "W_MEM": 128
+      },
+      "display_name": "KV Update",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 876.875,
+      "logical_members": [
+        "kv_update"
+      ],
+      "main_or_auxiliary": "auxiliary",
+      "pim_issued_gap_details": {
+        "commands": [
+          {
+            "command": "ACT-1",
+            "gap_cycles": 505,
+            "issued_event_count": 37,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 14,
+                "interval_count": 2,
+                "previous_command": "CASWR"
+              },
+              {
+                "gap_cycles": 2,
+                "interval_count": 21,
+                "previous_command": "PRE"
+              },
+              {
+                "gap_cycles": 22,
+                "interval_count": 1,
+                "previous_command": "PRE"
+              },
+              {
+                "gap_cycles": 29,
+                "interval_count": 3,
+                "previous_command": "PRE"
+              },
+              {
+                "gap_cycles": 288,
+                "interval_count": 1,
+                "previous_command": "REFab"
+              },
+              {
+                "gap_cycles": 3,
+                "interval_count": 8,
+                "previous_command": "WR"
+              },
+              {
+                "gap_cycles": 14,
+                "interval_count": 1,
+                "previous_command": "WR"
+              }
+            ]
+          },
+          {
+            "command": "ACT-2",
+            "gap_cycles": 36,
+            "issued_event_count": 36,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 36,
+                "previous_command": "ACT-1"
+              }
+            ]
+          },
+          {
+            "command": "CASWR",
+            "gap_cycles": 117,
+            "issued_event_count": 12,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 5,
+                "previous_command": "ACT-2"
+              },
+              {
+                "gap_cycles": 5,
+                "interval_count": 1,
+                "previous_command": "ACT-2"
+              },
+              {
+                "gap_cycles": 6,
+                "interval_count": 2,
+                "previous_command": "ACT-2"
+              },
+              {
+                "gap_cycles": 21,
+                "interval_count": 3,
+                "previous_command": "CASWR"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 1,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "PRE",
+            "gap_cycles": 213,
+            "issued_event_count": 35,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 4,
+                "interval_count": 2,
+                "previous_command": "ACT-2"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 7,
+                "previous_command": "PRE"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 1,
+                "previous_command": "TMOD"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 22,
+                "previous_command": "WR"
+              },
+              {
+                "gap_cycles": 48,
+                "interval_count": 3,
+                "previous_command": "WR"
+              }
+            ]
+          },
+          {
+            "command": "PREA",
+            "gap_cycles": 55,
+            "issued_event_count": 1,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 55,
+                "interval_count": 1,
+                "previous_command": "WR"
+              }
+            ]
+          },
+          {
+            "command": "TMOD",
+            "gap_cycles": 46,
+            "issued_event_count": 3,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 1,
+                "previous_command": "CASWR"
+              },
+              {
+                "gap_cycles": 13,
+                "interval_count": 1,
+                "previous_command": "RDMAC8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 1,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "WR",
+            "gap_cycles": 431,
+            "issued_event_count": 48,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 13,
+                "interval_count": 1,
+                "previous_command": "ACT-1"
+              },
+              {
+                "gap_cycles": 4,
+                "interval_count": 6,
+                "previous_command": "ACT-2"
+              },
+              {
+                "gap_cycles": 12,
+                "interval_count": 20,
+                "previous_command": "ACT-2"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 1,
+                "previous_command": "CASWR"
+              },
+              {
+                "gap_cycles": 2,
+                "interval_count": 1,
+                "previous_command": "CASWR"
+              },
+              {
+                "gap_cycles": 6,
+                "interval_count": 4,
+                "previous_command": "CASWR"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 2,
+                "previous_command": "PRE"
+              },
+              {
+                "gap_cycles": 15,
+                "interval_count": 1,
+                "previous_command": "PRE"
+              },
+              {
+                "gap_cycles": 8,
+                "interval_count": 12,
+                "previous_command": "WR"
+              }
+            ]
+          }
+        ],
+        "total_gap_cycles": 1403
+      },
+      "reference_equivalent_cycles": 1403.0,
+      "region_id": "aux.kv_update",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 500.0,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 25908.892561983474,
+          "first_issue_cycle": null,
+          "formula_cycles": 51817.78512396695,
+          "full_work_duration_ns": 97968.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 25908.892561983474,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 41454.22809917356
+        }
+      },
+      "command_counts": {},
+      "display_name": "Softmax",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 25908.892561983474,
+      "logical_members": [
+        "softmax"
+      ],
+      "main_or_auxiliary": "auxiliary",
+      "pim_issued_gap_details": null,
+      "reference_equivalent_cycles": 41454.22809917356,
+      "region_id": "aux.softmax",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 500.0,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 15.0,
+          "first_issue_cycle": null,
+          "formula_cycles": 30.0,
+          "full_work_duration_ns": 15.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 15.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 24.0
+        }
+      },
+      "command_counts": {},
+      "display_name": "FlashAttention Merge",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 15.0,
+      "logical_members": [
+        "flash_merge"
+      ],
+      "main_or_auxiliary": "auxiliary",
+      "pim_issued_gap_details": null,
+      "reference_equivalent_cycles": 24.0,
+      "region_id": "aux.flash_merge",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        }
+      },
+      "command_counts": {},
+      "display_name": "Score Transfer",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 0.0,
+      "logical_members": [
+        "score_transfer"
+      ],
+      "main_or_auxiliary": "auxiliary",
+      "pim_issued_gap_details": null,
+      "reference_equivalent_cycles": 0.0,
+      "region_id": "aux.score_transfer",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 131.875,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 131.875,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 131.875,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 211.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 500.0,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 448.0,
+          "first_issue_cycle": null,
+          "formula_cycles": 896.0,
+          "full_work_duration_ns": 448.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 448.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 716.8
+        }
+      },
+      "command_counts": {
+        "AF": 8,
+        "RD_AF": 8
+      },
+      "display_name": "FFN Activation",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 579.875,
+      "logical_members": [
+        "activation"
+      ],
+      "main_or_auxiliary": "auxiliary",
+      "pim_issued_gap_details": {
+        "commands": [
+          {
+            "command": "ACT8-1",
+            "gap_cycles": 34,
+            "issued_event_count": 1,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 34,
+                "interval_count": 1,
+                "previous_command": "PREA"
+              }
+            ]
+          },
+          {
+            "command": "ACT8-2",
+            "gap_cycles": 1,
+            "issued_event_count": 1,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 1,
+                "previous_command": "ACT8-1"
+              }
+            ]
+          },
+          {
+            "command": "AF8",
+            "gap_cycles": 116,
+            "issued_event_count": 8,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 78,
+                "interval_count": 1,
+                "previous_command": "ACT8-2"
+              },
+              {
+                "gap_cycles": 1,
+                "interval_count": 6,
+                "previous_command": "AF8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 1,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "PREA",
+            "gap_cycles": 32,
+            "issued_event_count": 1,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 32,
+                "interval_count": 1,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "RDAF8",
+            "gap_cycles": 8,
+            "issued_event_count": 8,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 8,
+                "previous_command": "CASRDAF8"
+              }
+            ]
+          },
+          {
+            "command": "TMOD",
+            "gap_cycles": 20,
+            "issued_event_count": 4,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 2,
+                "previous_command": "AF8"
+              },
+              {
+                "gap_cycles": 9,
+                "interval_count": 1,
+                "previous_command": "RDAF8"
+              },
+              {
+                "gap_cycles": 9,
+                "interval_count": 1,
+                "previous_command": "RDMAC8"
+              }
+            ]
+          }
+        ],
+        "total_gap_cycles": 211
+      },
+      "reference_equivalent_cycles": 927.8,
+      "region_id": "aux.ffn_activation",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "unmodeled",
+          "duration_ns": null,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": null,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "unavailable",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": null
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        }
+      },
+      "command_counts": {
+        "EWADD": 1
+      },
+      "display_name": "Attention Residual",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 0.0,
+      "logical_members": [
+        "residual"
+      ],
+      "main_or_auxiliary": "auxiliary",
+      "pim_issued_gap_details": null,
+      "reference_equivalent_cycles": 0.0,
+      "region_id": "aux.attention_residual",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "unmodeled",
+          "duration_ns": null,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": null,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "unavailable",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": null
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        }
+      },
+      "command_counts": {
+        "EWADD": 1
+      },
+      "display_name": "FFN Residual",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 0.0,
+      "logical_members": [
+        "residual"
+      ],
+      "main_or_auxiliary": "auxiliary",
+      "pim_issued_gap_details": null,
+      "reference_equivalent_cycles": 0.0,
+      "region_id": "aux.ffn_residual",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 5276.197128295898,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 5276.197128295898,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 5276.197128295898,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 8441.915405273438
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        }
+      },
+      "command_counts": {},
+      "display_name": "PP Handoff",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 5276.197128295898,
+      "logical_members": [
+        "pp_handoff"
+      ],
+      "main_or_auxiliary": "auxiliary",
+      "pim_issued_gap_details": null,
+      "reference_equivalent_cycles": 8441.915405273438,
+      "region_id": "aux.pp_handoff",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "unavailable",
+          "duration_ns": null,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": null,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "unavailable",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": null
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        }
+      },
+      "command_counts": {
+        "EOC": 1,
+        "SYNC": 1
+      },
+      "display_name": "SYNC / Control",
+      "fusion": true,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 0.0,
+      "logical_members": [
+        "sync",
+        "control"
+      ],
+      "main_or_auxiliary": "auxiliary",
+      "pim_issued_gap_details": null,
+      "reference_equivalent_cycles": 0.0,
+      "region_id": "aux.sync_control",
+      "segment_id": null
+    },
+    {
+      "backends": {
+        "cxl": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        },
+        "pim": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": 625.0,
+          "completion_cycle": null,
+          "coverage": "estimated",
+          "duration_ns": 1993.75,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 1993.75,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 1993.75,
+          "measurement_kind": "estimated_attribution",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 3190.0
+        },
+        "pnm": {
+          "accept_cycle": null,
+          "accounted_cycles": null,
+          "clock_period_ps": null,
+          "completion_cycle": null,
+          "coverage": "modeled",
+          "duration_ns": 0.0,
+          "first_issue_cycle": null,
+          "formula_cycles": null,
+          "full_work_duration_ns": 0.0,
+          "last_issue_cycle": null,
+          "legacy_ledger_duration_ns": 0.0,
+          "measurement_kind": "legacy_formula",
+          "native_cycles": null,
+          "observed_span_cycles": null,
+          "reference_equivalent_cycles": 0.0
+        }
+      },
+      "command_counts": {},
+      "display_name": "Unattributed / Background / Tail",
+      "fusion": false,
+      "instance_id": null,
+      "legacy_ledger_duration_ns": 1993.75,
+      "logical_members": [],
+      "main_or_auxiliary": "auxiliary",
+      "pim_issued_gap_details": {
+        "commands": [
+          {
+            "command": "CASRDAF8",
+            "gap_cycles": 118,
+            "issued_event_count": 8,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 9,
+                "interval_count": 6,
+                "previous_command": "RDAF8"
+              },
+              {
+                "gap_cycles": 32,
+                "interval_count": 2,
+                "previous_command": "TMOD"
+              }
+            ]
+          },
+          {
+            "command": "REFab",
+            "gap_cycles": 3060,
+            "issued_event_count": 90,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 34,
+                "interval_count": 90,
+                "previous_command": "PREA"
+              }
+            ]
+          },
+          {
+            "command": "STARTUP",
+            "gap_cycles": 1,
+            "issued_event_count": 0,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 1,
+                "interval_count": 1,
+                "previous_command": "TRACE_START"
+              }
+            ]
+          },
+          {
+            "command": "TAIL",
+            "gap_cycles": 11,
+            "issued_event_count": 0,
+            "predecessor_gaps": [
+              {
+                "gap_cycles": 11,
+                "interval_count": 1,
+                "previous_command": "RDMAC8"
+              }
+            ]
+          }
+        ],
+        "total_gap_cycles": 3190
+      },
+      "reference_equivalent_cycles": 3190.0,
+      "region_id": "aux.unattributed",
+      "segment_id": null
+    }
+  ],
+  "run_id": "3c9bd7f3bcf27833a4ff",
+  "run_identity": {
+    "artifacts": {
+      "backend_config": {
+        "bytes": 1223,
+        "path": "cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/full/3c48128353fd5e7d/ramulator/systolic_pim_4_batch_size_4_ewmul_pnm_1_flash_1024_fp8_chconcurrent/model_parallel_kv_head_main/Llama2-70B/trace_2_FC_devices_seqlen_30976.txt.ramulator.yaml",
+        "sha256": "de4609fca859eea10739f6da8294ec2e87b9f1fb0ac6929f30919035510944eb"
+      },
+      "calibration_adapter": {
+        "bytes": 17480,
+        "path": "cent_simulation/cent_power_calculator.py",
+        "sha256": "0c8e3f401c3d475f6793194ef87751569b84b5abe9c8db5cade7a7e327ae8c20"
+      },
+      "calibration_model": {
+        "bytes": 31418,
+        "path": "aim_simulator/scripts/cellar_power_calculator.py",
+        "sha256": "418fa1e92b3d3bdf8b27697ec4533f6064db1cf635e5e8e7ea7c2735849c670a"
+      },
+      "issued_command_trace": {
+        "bytes": 4937975,
+        "path": "cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/full/3c48128353fd5e7d/ramulator/systolic_pim_4_batch_size_4_ewmul_pnm_1_flash_1024_fp8_chconcurrent/model_parallel_kv_head_main/Llama2-70B/trace_2_FC_devices_seqlen_30976.txt.cmd.ch15",
+        "sha256": "5b49773fc875ab59d19b6bf913b68ef49fda1ba61d8993ff4dbaa3dbc743276b"
+      },
+      "legacy_formula_reference": {
+        "bytes": 72998,
+        "path": "cent_simulation/run_sim.py",
+        "sha256": "1ee038728e2dae3c46512706df3a0e657f5aece100b0b7fee02e70368f9b24df"
+      },
+      "pim_log": {
+        "bytes": 139688,
+        "path": "cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/full/3c48128353fd5e7d/ramulator/systolic_pim_4_batch_size_4_ewmul_pnm_1_flash_1024_fp8_chconcurrent/model_parallel_kv_head_main/Llama2-70B/trace_2_FC_devices_seqlen_30976.txt.log",
+        "sha256": "cd896b1d2998fe961492ff57c7bfb1eb84c0920ec251bd9bb8487f079817eff2"
+      },
+      "postprocessor": {
+        "bytes": 51209,
+        "path": "cent_simulation/cycle_breakdown.py",
+        "sha256": "00f7f53964abaf787ecbc7a91d96121806d910361a0378ed46bf397835f71f9b"
+      },
+      "report_cli": {
+        "bytes": 5145,
+        "path": "cent_simulation/scripts/analyze_cycle_breakdown.py",
+        "sha256": "322cb50704bd8a256434a7a84e273ef0fa6e23af0882887d7fed4368ac1266f4"
+      },
+      "resolved_timing": {
+        "bytes": 560,
+        "path": "cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/full/3c48128353fd5e7d/ramulator/systolic_pim_4_batch_size_4_ewmul_pnm_1_flash_1024_fp8_chconcurrent/model_parallel_kv_head_main/Llama2-70B/trace_2_FC_devices_seqlen_30976.txt.timing.yaml",
+        "sha256": "35c3806ca68f97e3935148454158afe3ccf5f47caebe4fc6f02d926c921ca37c"
+      },
+      "source_csv": {
+        "bytes": 1766,
+        "path": "cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/full/3c48128353fd5e7d/simulation_results.csv",
+        "sha256": "af3d121abeeffaebd31d9dd5110890e261b2a79058ba2540b4953c0823c9626f"
+      },
+      "source_provenance": {
+        "bytes": 886,
+        "path": "cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/full/3c48128353fd5e7d/RUN_PROVENANCE.md",
+        "sha256": "efb6230ff2d65783796e3d9c970e8bac57d81a1f33cd8cc50539710ba7d26b91"
+      },
+      "stats_parser": {
+        "bytes": 11156,
+        "path": "aim_simulator/scripts/aim_analysis/ramulator.py",
+        "sha256": "222815c25b3b65d37997dd73b714c8411ce936e46f03fe6695b267b18725fb0a"
+      },
+      "systolic_metadata": {
+        "bytes": 40989,
+        "path": "cent_simulation/trace/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/full/3c48128353fd5e7d/systolic_pim_4_batch_size_4_ewmul_pnm_1_flash_1024_fp8_chconcurrent/model_parallel_kv_head_main/Llama2-70B/trace_2_FC_devices_seqlen_30976.txt.systolic.json",
+        "sha256": "d19c2859bff9b22ddceddeff499ae5b54a2d9075ff05bc7cbd92de5334ba9546"
+      },
+      "trace": {
+        "bytes": 200766,
+        "path": "cent_simulation/trace/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/full/3c48128353fd5e7d/systolic_pim_4_batch_size_4_ewmul_pnm_1_flash_1024_fp8_chconcurrent/model_parallel_kv_head_main/Llama2-70B/trace_2_FC_devices_seqlen_30976.txt",
+        "sha256": "2d8c8d632a956cf2c2548dd28e5073eb4f8c9a8e50e5ff9f6247aca61938d316"
+      }
+    },
+    "estimator": "legacy_tp_issued_gap_v1",
+    "formula_profile": {
+      "exp_cycles": 13.0,
+      "pnm_clock_period_ps": 500.0,
+      "rv_rmsnorm_cycles": 26.0,
+      "rv_rope_cycles_per_element": 0.375,
+      "rv_softmax_cycles_per_head": 17.25,
+      "shared_buffer_read_cycles": 1.0,
+      "shared_buffer_write_cycles": 1.0,
+      "vector_add_mul_cycles": 4.0,
+      "vector_width": 16
+    },
+    "source": {
+      "aim_checkout_commit": "e4b243afc0276055549268256890ed9e20eb275b",
+      "branch": "v0.0",
+      "commit": "2cbf4529fda5168ef17786ffaab4d4d76b50d0cf"
+    },
+    "source_row": {
+      "Acc latency": "0.031935892561983474",
+      "Attention mapping": "kv_head",
+      "Banks per device": "8",
+      "Batch group energy (mJ)": "1244.1994381084558",
+      "Batch group latency (ms)": "32.88560025627704",
+      "Batch size": "4",
+      "CXL latency": "0.02638098564147949",
+      "CXL payload (bits/block)": "2621440.0",
+      "Channel concurrency": "True",
+      "Channels per block": "32",
+      "Channels per device": "32",
+      "Context window": "32768",
+      "Critical local latency": "0.3846890175619835",
+      "DRAM energy model": "legacy",
+      "Device number": "32",
+      "Device utilization": "1.0",
+      "EWMUL PNM effective": "True",
+      "EWMUL PNM provenance": "native",
+      "EWMUL PNM requested": "True",
+      "EWMUL activation latency": "0.000448",
+      "Embedding latency": "0.0",
+      "Exposed softmax latency": "0.025908892561983473",
+      "Flash attention": "True",
+      "Flash attention block size": "1024",
+      "Full softmax latency": "0.097968",
+      "Helper Acc latency": "0.031935892561983474",
+      "Helper PIM latency": "0.352753125",
+      "KV cache mapping": "kv_head_sharded",
+      "KV reduction latency": "0.000112",
+      "Main Acc latency": "0.031935892561983474",
+      "Main PIM latency": "0.352753125",
+      "Model": "Llama2-70B",
+      "PIM element bits": "8",
+      "PIM elements per 256-bit word": "32",
+      "PIM latency": "0.352753125",
+      "PP handoff CXL latency": "0.005276197128295898",
+      "PP handoff CXL payload (bits/block)": "524288.0",
+      "Parallel SRAM banks": "32",
+      "Pipeline parallelism": "16",
+      "Pipelined softmax": "True",
+      "Precision": "FP8",
+      "Q reduction latency": "6.4e-05",
+      "SV reduction latency": "0.00096",
+      "Sequence length": "30976",
+      "Shared buffer capacity (bytes)": "4194304",
+      "Softmax exposure factor": "0.2644628099173554",
+      "Softmax pipeline startup tokens": "8192",
+      "Systolic PIM power assumption": "iso_256b_bf16_calibration",
+      "Systolic dim": "4",
+      "Systolic pim": "True",
+      "TP collective CXL latency": "0.021104788513183592",
+      "TP collective CXL payload (bits/block)": "2097152.0",
+      "Tensor parallelism": "2",
+      "Throughput (tokens/s)": "1946.140544835699",
+      "Token energy (mJ)": "311.04985952711394",
+      "Token latency (ms)": "32.88560025627704",
+      "Total power (W)": "605.3467430911652",
+      "TransformerBlock latency": "0.411070003203463"
+    }
+  },
+  "scope": "representative_block_batch_group",
+  "trace_command_counts": {
+    "AF": 8,
+    "EOC": 1,
+    "EWADD": 2,
+    "MAC_ABK": 2836,
+    "RD_AF": 8,
+    "RD_MAC": 2016,
+    "SYNC": 1,
+    "WR_BIAS": 2016,
+    "WR_GB": 606,
+    "W_MEM": 128
+  }
+}

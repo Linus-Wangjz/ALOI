@@ -1,0 +1,152 @@
+{
+  "artifacts": {
+    "backend_config": {
+      "bytes": 1179,
+      "path": "cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/e8a71551be43a1ce/ramulator/systolic_pim_4_batch_size_4_ewmul_pnm_1_fp8/model_parallel_kv_head_main/Llama2-70B/trace_2_FC_devices_seqlen_30976.txt.ramulator.yaml",
+      "sha256": "f77742900c34dd54e02e0daf64635bc12d08c1b774baab8ee39149f242720cd1"
+    },
+    "calibration_adapter": {
+      "bytes": 17480,
+      "path": "cent_simulation/cent_power_calculator.py",
+      "sha256": "0c8e3f401c3d475f6793194ef87751569b84b5abe9c8db5cade7a7e327ae8c20"
+    },
+    "calibration_model": {
+      "bytes": 31418,
+      "path": "aim_simulator/scripts/cellar_power_calculator.py",
+      "sha256": "418fa1e92b3d3bdf8b27697ec4533f6064db1cf635e5e8e7ea7c2735849c670a"
+    },
+    "issued_command_trace": {
+      "bytes": 4597140,
+      "path": "cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/e8a71551be43a1ce/ramulator/systolic_pim_4_batch_size_4_ewmul_pnm_1_fp8/model_parallel_kv_head_main/Llama2-70B/trace_2_FC_devices_seqlen_30976.txt.cmd.ch15",
+      "sha256": "c4026c9e9a837a0f75bfd0ffa2f9188077e5313de56484b8649588fc000d1415"
+    },
+    "legacy_formula_reference": {
+      "bytes": 72998,
+      "path": "cent_simulation/run_sim.py",
+      "sha256": "1ee038728e2dae3c46512706df3a0e657f5aece100b0b7fee02e70368f9b24df"
+    },
+    "pim_log": {
+      "bytes": 140375,
+      "path": "cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/e8a71551be43a1ce/ramulator/systolic_pim_4_batch_size_4_ewmul_pnm_1_fp8/model_parallel_kv_head_main/Llama2-70B/trace_2_FC_devices_seqlen_30976.txt.log",
+      "sha256": "facfdbdb2bd77ade84a2487c67724453b754adb8dd2e176e01976832e8397d7c"
+    },
+    "postprocessor": {
+      "bytes": 51209,
+      "path": "cent_simulation/cycle_breakdown.py",
+      "sha256": "00f7f53964abaf787ecbc7a91d96121806d910361a0378ed46bf397835f71f9b"
+    },
+    "report_cli": {
+      "bytes": 5145,
+      "path": "cent_simulation/scripts/analyze_cycle_breakdown.py",
+      "sha256": "322cb50704bd8a256434a7a84e273ef0fa6e23af0882887d7fed4368ac1266f4"
+    },
+    "resolved_timing": {
+      "bytes": 560,
+      "path": "cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/e8a71551be43a1ce/ramulator/systolic_pim_4_batch_size_4_ewmul_pnm_1_fp8/model_parallel_kv_head_main/Llama2-70B/trace_2_FC_devices_seqlen_30976.txt.timing.yaml",
+      "sha256": "35c3806ca68f97e3935148454158afe3ccf5f47caebe4fc6f02d926c921ca37c"
+    },
+    "source_csv": {
+      "bytes": 1697,
+      "path": "cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/e8a71551be43a1ce/simulation_results.csv",
+      "sha256": "283abfd0cd303c0aa9263ec8e259a5ae3ccc06d72ba8643f1bd4846b517f1df9"
+    },
+    "source_provenance": {
+      "bytes": 886,
+      "path": "cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/e8a71551be43a1ce/RUN_PROVENANCE.md",
+      "sha256": "efb6230ff2d65783796e3d9c970e8bac57d81a1f33cd8cc50539710ba7d26b91"
+    },
+    "stats_parser": {
+      "bytes": 11156,
+      "path": "aim_simulator/scripts/aim_analysis/ramulator.py",
+      "sha256": "222815c25b3b65d37997dd73b714c8411ce936e46f03fe6695b267b18725fb0a"
+    },
+    "systolic_metadata": {
+      "bytes": 13643,
+      "path": "cent_simulation/trace/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/e8a71551be43a1ce/systolic_pim_4_batch_size_4_ewmul_pnm_1_fp8/model_parallel_kv_head_main/Llama2-70B/trace_2_FC_devices_seqlen_30976.txt.systolic.json",
+      "sha256": "585326d77414b529c0d7b40f500b1a6a9b35a860eba83317b8efdf5b92c8f04f"
+    },
+    "trace": {
+      "bytes": 3892214,
+      "path": "cent_simulation/trace/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/e8a71551be43a1ce/systolic_pim_4_batch_size_4_ewmul_pnm_1_fp8/model_parallel_kv_head_main/Llama2-70B/trace_2_FC_devices_seqlen_30976.txt",
+      "sha256": "152aa9d900d91cef04525ba93bbd786562570c6c61e4c7011024c6cf001a2c06"
+    }
+  },
+  "estimator": "legacy_tp_issued_gap_v1",
+  "formula_profile": {
+    "exp_cycles": 13.0,
+    "pnm_clock_period_ps": 500.0,
+    "rv_rmsnorm_cycles": 26.0,
+    "rv_rope_cycles_per_element": 0.375,
+    "rv_softmax_cycles_per_head": 17.25,
+    "shared_buffer_read_cycles": 1.0,
+    "shared_buffer_write_cycles": 1.0,
+    "vector_add_mul_cycles": 4.0,
+    "vector_width": 16
+  },
+  "run_id": "b10924bda8ffe2b26c81",
+  "source": {
+    "aim_checkout_commit": "e4b243afc0276055549268256890ed9e20eb275b",
+    "branch": "v0.0",
+    "commit": "2cbf4529fda5168ef17786ffaab4d4d76b50d0cf"
+  },
+  "source_row": {
+    "Acc latency": "0.10398",
+    "Attention mapping": "kv_head",
+    "Banks per device": "8",
+    "Batch group energy (mJ)": "1196.4487507909184",
+    "Batch group latency (ms)": "46.08957885131836",
+    "Batch size": "4",
+    "CXL latency": "0.02638098564147949",
+    "CXL payload (bits/block)": "2621440.0",
+    "Channel concurrency": "False",
+    "Channels per block": "32",
+    "Channels per device": "32",
+    "Context window": "32768",
+    "Critical local latency": "0.5497387499999999",
+    "DRAM energy model": "legacy",
+    "Device number": "32",
+    "Device utilization": "1.0",
+    "EWMUL PNM effective": "True",
+    "EWMUL PNM provenance": "native",
+    "EWMUL PNM requested": "True",
+    "EWMUL activation latency": "0.000448",
+    "Embedding latency": "0.0",
+    "Exposed softmax latency": "0.097968",
+    "Flash attention": "False",
+    "Flash attention block size": "0",
+    "Full softmax latency": "0.097968",
+    "Helper Acc latency": "0.10398",
+    "Helper PIM latency": "0.44575875",
+    "KV cache mapping": "kv_head_sharded",
+    "KV reduction latency": "0.000112",
+    "Main Acc latency": "0.10398",
+    "Main PIM latency": "0.44575875",
+    "Model": "Llama2-70B",
+    "PIM element bits": "8",
+    "PIM elements per 256-bit word": "32",
+    "PIM latency": "0.44575875",
+    "PP handoff CXL latency": "0.005276197128295898",
+    "PP handoff CXL payload (bits/block)": "524288.0",
+    "Parallel SRAM banks": "32",
+    "Pipeline parallelism": "16",
+    "Pipelined softmax": "False",
+    "Precision": "FP8",
+    "Q reduction latency": "6.4e-05",
+    "SV reduction latency": "0.00096",
+    "Sequence length": "30976",
+    "Shared buffer capacity (bytes)": "4194304",
+    "Softmax exposure factor": "1.0",
+    "Softmax pipeline startup tokens": "8192",
+    "Systolic PIM power assumption": "iso_256b_bf16_calibration",
+    "Systolic dim": "4",
+    "Systolic pim": "True",
+    "TP collective CXL latency": "0.021104788513183592",
+    "TP collective CXL payload (bits/block)": "2097152.0",
+    "Tensor parallelism": "2",
+    "Throughput (tokens/s)": "1388.600234479455",
+    "Token energy (mJ)": "299.1121876977296",
+    "Token latency (ms)": "46.08957885131836",
+    "Total power (W)": "415.3472539727301",
+    "TransformerBlock latency": "0.5761197356414794"
+  }
+}

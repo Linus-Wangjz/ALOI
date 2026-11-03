@@ -1,0 +1,21 @@
+{
+  "retained": {
+    "baseline": {
+      "run": "/home/linusw/Documents/Repo/ALOI/cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/e8a71551be43a1ce",
+      "report": "/home/linusw/Documents/Repo/ALOI/cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/e8a71551be43a1ce/breakdown/b10924bda8ffe2b26c81",
+      "trace": "/home/linusw/Documents/Repo/ALOI/cent_simulation/trace/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/e8a71551be43a1ce"
+    },
+    "full": {
+      "run": "/home/linusw/Documents/Repo/ALOI/cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/full/3c48128353fd5e7d",
+      "report": "/home/linusw/Documents/Repo/ALOI/cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/full/3c48128353fd5e7d/breakdown/3c9bd7f3bcf27833a4ff",
+      "trace": "/home/linusw/Documents/Repo/ALOI/cent_simulation/trace/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/full/3c48128353fd5e7d"
+    }
+  },
+  "deleted": [
+    "/home/linusw/Documents/Repo/ALOI/cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/43bf3b478e863d52",
+    "/home/linusw/Documents/Repo/ALOI/cent_simulation/trace/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/43bf3b478e863d52",
+    "/home/linusw/Documents/Repo/ALOI/cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/full/0a913a61cf7523a4",
+    "/home/linusw/Documents/Repo/ALOI/cent_simulation/trace/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/full/0a913a61cf7523a4"
+  ],
+  "removed_bytes": 295335421
+}

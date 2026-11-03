@@ -1,0 +1,17 @@
+{
+  "sha256": {
+    "cent_simulation/run_sim.py": "1ee038728e2dae3c46512706df3a0e657f5aece100b0b7fee02e70368f9b24df",
+    "cent_simulation/TransformerBlock.py": "706cdc881eba8aea6a47f9efcc7cd88dead2d491f2e32bc94fa9c28c11566257",
+    "cent_simulation/aim_sim.py": "81793d673cb4026fc4c81d7599484c8f58f912d81deaa5e0130a9676855b7c4c",
+    "cent_simulation/tp_mapping.py": "aeaedbcd86ff3695b26c1c8b200a63d42589070c352d2a5ac7b358a1ae336bba",
+    "aim_simulator/src/frontend/impl/memory_trace/aim_trace.cpp": "53068d846d3e8303455a93103ae9f906e4500f1e8441bf9fafa1243caef62633",
+    "aim_simulator/src/memory_system/impl/aim_DRAM_system.cpp": "237b8ee41456ca5334f36b630ebed821b04980f4508e419a01283568a649a7e6",
+    "aim_simulator/src/dram/impl/LPDDR4.cpp": "fa53b344d5ce7e9e0603d0f74e38be9c4e585d1ebaa030fe100e8effe16959ce",
+    "aim_simulator/src/dram_controller/impl/plugin/dram_timing_exporter.cpp": "9bdb9a7522858c8ed06a770b865b9cf997122d5cc44da6f3f691f5994dbd3d90",
+    "aim_simulator/src/addr_mapper/impl/linear_mappers.cpp": "54f2fa73f53d47e282419976f40a11f53245b35eb25b1b4c525a1b568ffb012f",
+    "aim_simulator/test/generated/example_LPDDR4X_nCCD2.yaml": "2859451dfe06babe9e0e26fbacfbc808533b27a77886d887222d705211301e46",
+    "aim_simulator/build/ramulator2": "76c3230498187df74114b447413315bd2b8437c57f723f8b562193cc4c150df7",
+    "aim_simulator/libramulator.so": "30a3e6b7b35904f1e5a4803a81007d83d3dd698e04cc13758e107b2c9f986e5d"
+  },
+  "python": "3.14.7 | packaged by conda-forge | (main, Sep  2 2026, 21:08:32) [GCC 15.3.0]"
+}

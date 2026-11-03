@@ -1,0 +1,43 @@
+variant,region_id,kernel,old_pim_cycles,old_total_us,old_MAC8_cycles,old_MAC8_count,old_WRGB_cycles,old_WRGB_count,new_pim_cycles,new_total_us,new_MAC8_cycles,new_MAC8_count,new_WRGB_cycles,new_WRGB_count,delta_pim_cycles
+baseline,attention.rmsnorm,Attention RMSNorm,0.0,0.45,0,0,0,0,0.0,0.45,0,0,0,0,0.0
+baseline,attention.q_projection,Q Projection,17108.0,10.7565,11278,4144,2027,512,19640.0,12.339,11324,4144,4040,512,2532.0
+baseline,attention.kv_projection,K/V Projection,4561.0,2.962625,2854,1036,509,128,4750.0,3.08075,2808,1036,1017,128,189.0
+baseline,attention.qk,QK,82018.0,51.26125,46402,17152,8186,2048,93686.0,58.55375,46218,17152,16363,2048,11668.0
+baseline,attention.sv,SV,77722.0,49.53625,43382,15872,15308,3872,94126.0,59.78875,43520,15872,30563,3872,16404.0
+baseline,attention.o_projection,O Projection,17450.0,21.458644256591796,11278,4144,2024,512,19741.0,22.890519256591798,11278,4144,4047,512,2291.0
+baseline,ffn.rmsnorm,FFN RMSNorm,0.0,0.45,0,0,0,0,0.0,0.45,0,0,0,0,0.0
+baseline,ffn.up_gate_projection,Up/Gate Projection,140235.0,87.646875,90546,33152,16192,4096,157727.0,98.579375,90454,33152,32341,4096,17492.0
+baseline,ffn.down_projection,Down Projection,61550.0,49.021144256591796,39588,14504,7084,1792,69372.0,53.9098942565918,39680,14504,14140,1792,7822.0
+baseline,aux.rope_q,RoPE Q,0.0,3.136,0,0,0,0,0.0,3.136,0,0,0,0,0.0
+baseline,aux.rope_k,RoPE K,0.0,0.392,0,0,0,0,0.0,0.392,0,0,0,0,0.0
+baseline,aux.kv_update,KV Update,948.0,0.5925,0,0,0,0,1403.0,0.876875,0,0,0,0,455.0
+baseline,aux.softmax,Softmax,0.0,97.968,0,0,0,0,0.0,97.968,0,0,0,0,0.0
+baseline,aux.flash_merge,FlashAttention Merge,0.0,0.0,0,0,0,0,0.0,0.0,0,0,0,0,0.0
+baseline,aux.score_transfer,Score Transfer,248520.0,155.325,0,0,0,0,248552.0,155.345,0,0,0,0,32.0
+baseline,aux.ffn_activation,FFN Activation,203.0,0.574875,0,0,0,0,211.0,0.579875,0,0,0,0,8.0
+baseline,aux.attention_residual,Attention Residual,,0.0,0,0,0,0,,0.0,0,0,0,0,
+baseline,aux.ffn_residual,FFN Residual,,0.0,0,0,0,0,,0.0,0,0,0,0,
+baseline,aux.pp_handoff,PP Handoff,0.0,5.276197128295898,0,0,0,0,0.0,5.276197128295898,0,0,0,0,0.0
+baseline,aux.sync_control,SYNC / Control,,0.0,0,0,0,0,,0.0,0,0,0,0,
+baseline,aux.unattributed,Unattributed / Background / Tail,3638.0,2.27375,0,0,0,0,4006.0,2.50375,0,0,0,0,368.0
+full,attention.rmsnorm,Attention RMSNorm,0.0,0.45,0,0,0,0,0.0,0.45,0,0,0,0,0.0
+full,attention.q_projection,Q Projection,17108.0,10.7565,11278,4144,2027,512,19640.0,12.339,11324,4144,4040,512,2532.0
+full,attention.kv_projection,K/V Projection,4561.0,2.962625,2854,1036,509,128,4750.0,3.08075,2808,1036,1017,128,189.0
+full,attention.qk,QK,158795.0,99.246875,90016,33232,15872,3968,177013.0,110.633125,89418,33232,31730,3968,18218.0
+full,attention.sv,SV,89898.0,57.14625,43808,16976,15464,3872,111635.0,70.731875,43408,16976,30892,3872,21737.0
+full,attention.o_projection,O Projection,17488.0,21.482394256591796,11278,4144,2024,512,19515.0,22.7492692565918,11278,4144,4040,512,2027.0
+full,ffn.rmsnorm,FFN RMSNorm,0.0,0.45,0,0,0,0,0.0,0.45,0,0,0,0,0.0
+full,ffn.up_gate_projection,Up/Gate Projection,140582.0,87.86375,90592,33152,16192,4096,157871.0,98.669375,90408,33152,32341,4096,17289.0
+full,ffn.down_projection,Down Projection,61203.0,48.804269256591795,39588,14504,7084,1792,69177.0,53.788019256591795,39634,14504,14140,1792,7974.0
+full,aux.rope_q,RoPE Q,0.0,3.136,0,0,0,0,0.0,3.136,0,0,0,0,0.0
+full,aux.rope_k,RoPE K,0.0,0.392,0,0,0,0,0.0,0.392,0,0,0,0,0.0
+full,aux.kv_update,KV Update,948.0,0.5925,0,0,0,0,1403.0,0.876875,0,0,0,0,455.0
+full,aux.softmax,Softmax,0.0,25.908892561983475,0,0,0,0,0.0,25.908892561983475,0,0,0,0,0.0
+full,aux.flash_merge,FlashAttention Merge,0.0,0.015,0,0,0,0,0.0,0.015,0,0,0,0,0.0
+full,aux.score_transfer,Score Transfer,0.0,0.0,0,0,0,0,0.0,0.0,0,0,0,0,0.0
+full,aux.ffn_activation,FFN Activation,203.0,0.574875,0,0,0,0,211.0,0.579875,0,0,0,0,8.0
+full,aux.attention_residual,Attention Residual,,0.0,0,0,0,0,,0.0,0,0,0,0,
+full,aux.ffn_residual,FFN Residual,,0.0,0,0,0,0,,0.0,0,0,0,0,
+full,aux.pp_handoff,PP Handoff,0.0,5.276197128295898,0,0,0,0,0.0,5.276197128295898,0,0,0,0,0.0
+full,aux.sync_control,SYNC / Control,,0.0,0,0,0,0,,0.0,0,0,0,0,
+full,aux.unattributed,Unattributed / Background / Tail,2754.0,1.72125,0,0,0,0,3190.0,1.99375,0,0,0,0,436.0
