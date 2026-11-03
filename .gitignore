@@ -5,5 +5,8 @@ tmp.log
 logs.txt
 /output
 cent_simulation/trace
-cent_simulation/output
+cent_simulation/output/*
+!cent_simulation/output/legacy_optimizations/
+cent_simulation/output/legacy_optimizations/*
+!cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/
 /docs

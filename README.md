@@ -6,6 +6,40 @@ This repository provides the following artifact required for the evaluation of *
 <img src="CENT.png" alt="CENT" width="80%">
 </p>
 
+## Current implementation and reference results
+
+The performance results currently use the **legacy trace-driven simulation
+framework**: Python generates AiM traces, the C++ AiM/Ramulator backend models
+PIM timing, and Python adds analytical PNM/CXL latency and energy. The planned
+ALOI compiler/command DAG and new functional + cycle-level simulation engine
+are not the implementation behind these results.
+
+The committed single-buffer reference is
+[`cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4`](cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/README.md).
+It contains one baseline and one fully optimized run of **Llama2-70B, FP8,
+SA4×32, TP2, batch4**, with a **32,768-token window and 30,976 active tokens**.
+Both use LPDDR4 **32 channels × x16, prefetch16, nBL=8, nCCD=2, 625 ps/clock**.
+
+| Retained single-buffer result | Optimizations | PIM cycles | Block latency (µs) |
+| --- | --- | ---: | ---: |
+| [Baseline](cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/baseline/summary.txt) | EWMUL_PNM ON; FlashAttention, pipelined Softmax, and channel concurrency OFF | 713,214 | 576.119736 |
+| [Full](cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/full/summary.txt) | All four ON; FlashAttention block size 1024 | 564,405 | 411.070003 |
+
+These are per-block, per-batch-group results on one representative TP rank.
+The [combined summary](cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/summary.txt)
+includes every kernel's PIM/PNM/CXL contributions, command counts, and command
+gap details. PIM kernel gaps include waits; they are attribution estimates,
+not isolated arithmetic timings. **Residual/EWADD arithmetic is not yet
+modeled or charged.** Softmax overlap and PNM/CXL retain legacy formulas.
+
+The `double-buffering` branch additionally implements the opt-in `AiMAsync`
+two-GB execution profile, selected by `--pim-double-buffering`. The reference
+directory above uses the single-buffer `AiM` profile. See the separate
+[double-buffer comparison](cent_simulation/results/double_buffering_fp8_32k_batch4/summary.txt)
+for that branch's results and ablations. New performance runs should explicitly
+enable the four default optimizations documented below; double buffering is a
+separate hardware profile.
+
 ## Dependencies
 
 AiM Simulator is tested and verified with `g++-11/12/13` and `clang++-15`.
@@ -16,8 +50,8 @@ Python infrastructure requires `pandas`, `matplotlib`, `torch`, and `scipy` pack
 Clone the repository recursively:
 
 ```bash
-git clone --recursive https://github.com/Yufeng98/CENT.git
-cd CENT
+git clone --recursive --branch double-buffering https://github.com/Linus-Wangjz/ALOI.git
+cd ALOI
 ```
 
 Install the Python packages locally or create a conda environment:
