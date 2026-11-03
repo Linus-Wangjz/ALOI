@@ -1,5 +1,6 @@
 import os
 import math
+import re
 import pandas as pd
 import argparse
 import subprocess
@@ -53,6 +54,7 @@ def get_args():
     parser.add_argument("--model", choices=["Llama2-7B", "Llama2-13B", "Llama2-70B"], help="LLM Model", required=True)
     parser.add_argument("--generate_trace", action="store_true", help="Generate traces")
     parser.add_argument("--simulate_trace", action="store_true", help="Simulate traces")
+    parser.add_argument("--phase-breakdown", action="store_true", help="Measure Attention and FFN stages in the systolic KV-head TP trace")
     parser.add_argument("--process_results", action="store_true", help="Process results")
     parser.add_argument("--update_csv", action="store_true", help="Update results to csv file")
     parser.add_argument("--simulation_result_path", type=str, help="Path to the result file")
@@ -68,7 +70,7 @@ def get_args():
     parser.add_argument("--experiment", type=str, help="Experiment name used for default output paths (for example: GDDR6 or LPDDR4X_nCCD2)")
     parser.add_argument("--trace_root", "--trace-root", dest="trace_root", type=str, help="Directory for functional trace files")
     parser.add_argument("--log_root", "--log-root", dest="log_root", type=str, help="Directory for Ramulator logs and sidecar artifacts")
-    parser.add_argument("--dram_power_impl", "--dram-power-impl", dest="dram_power_impl", choices=["GDDR6", "LPDDR4", "LPDDR4X"], help="DRAM power table to use when updating CSV energy/power")
+    parser.add_argument("--dram_power_impl", "--dram-power-impl", dest="dram_power_impl", choices=["GDDR6", "LPDDR4", "LPDDR4X", "LPDDR4_MICRON", "LPDDR4X_MICRON"], help="DRAM power table to use when updating CSV energy/power")
     parser.add_argument("--dram_energy_model", "--dram-energy-model", dest="dram_energy_model", choices=DRAM_ENERGY_MODELS, default="legacy", help="DRAM energy model: command-count legacy or TraceRecorder-based activity replay")
     parser.add_argument("--decode_only", "--decode-only", dest="decode_only", action="store_true", help="Skip embedding traces and report decode-only token latency/energy")
     parser.add_argument("--model_parallel", action="store_true", help="Apply model parallelism")
@@ -123,6 +125,8 @@ def get_args():
         ),
     )
     args = parser.parse_args()
+    if args.phase_breakdown and not (args.kv_head_tp and args.systolic_pim and args.decode_only):
+        parser.error("--phase-breakdown currently requires --kv-head-tp --systolic-pim --decode-only")
     if args.kv_head_tp and args.inter_device_attention:
         parser.error("--kv-head-tp and --inter-device-attention are mutually exclusive")
     if args.kv_head_tp and not args.model_parallel:
@@ -140,9 +144,9 @@ def get_args():
             parser.error("--precision fp8 currently requires --systolic-pim and --kv-head-tp")
         if args.num_banks != 8:
             parser.error("--precision fp8 currently supports LPDDR4X with 8 banks/channel only")
-        if args.dram_power_impl not in (None, "LPDDR4X"):
+        if args.dram_power_impl not in (None, "LPDDR4X", "LPDDR4X_MICRON"):
             parser.error(
-                "--precision fp8 requires --dram-power-impl LPDDR4X"
+                "--precision fp8 requires --dram-power-impl LPDDR4X or LPDDR4X_MICRON"
             )
         if "LPDDR4X" not in os.path.basename(args.ramulator_config).upper():
             parser.error("--precision fp8 requires an LPDDR4X Ramulator config")
@@ -424,13 +428,18 @@ def missing_or_empty(file):
     return not os.path.exists(file) or os.stat(file).st_size == 0
 
 
-def trace_needs_generation(trace_file):
+def trace_needs_generation(trace_file, require_phase=False):
     path = Path(trace_file)
     if path.is_symlink() and not path.exists():
         # Old LPDDR4X trace links point at the retired LPDDR4 output tree. A
         # full rerun must replace only these dangling links with fresh traces.
         path.unlink()
-    return missing_or_empty(path)
+    if missing_or_empty(path):
+        return True
+    if require_phase:
+        with path.open() as trace:
+            return not any(line.strip() == "# PHASE attention_end" for line in trace)
+    return False
 
 
 def trace_based_artifact_paths(log_file):
@@ -492,7 +501,18 @@ def write_ramulator_config(base_config, destination, timing_path, command_trace_
 def needs_simulation(args, log_file):
     if not timing_artifact_complete(log_file):
         return True
+    if getattr(args, "phase_breakdown", False) and read_attention_end_cycles(log_file, required=False) is None:
+        return True
     return (args.dram_energy_model == "trace-based" or getattr(args, "record_command_trace", False)) and not trace_based_artifacts_complete(log_file)
+
+
+def read_attention_end_cycles(log_file, required=True):
+    matches = re.findall(r"^attention_end_cycles\s+(\d+)\s*$", Path(log_file).read_text(), re.MULTILINE)
+    if len(matches) != 1:
+        if required:
+            raise ValueError(f"Expected one Attention/FFN checkpoint in {log_file}; found {len(matches)}")
+        return None
+    return int(matches[0])
 
 
 def ramulator_command(args, trace_file, log_file):
@@ -567,12 +587,14 @@ def generate_trace(args, seqlen_list):
             for FC_devices in FC_devices_list:
                 main_mode = model_parallel_main_mode(args)
                 main_path = f"{trace_root_dir}/{main_mode}/{args.model}/trace_{FC_devices}_FC_devices_seqlen_{seqlen}.txt"
-                if trace_needs_generation(main_path):
+                if trace_needs_generation(main_path, require_phase=args.phase_breakdown):
                     commands_generate_traces.append([python, "function_sim.py", model, "--n_heads", str(n_heads[args.model]), "--ffn_dim", str(ffn_size[args.model]), "--only-trace", "--num-channels", str(args.num_channels), "--num-banks", str(args.num_banks), "--max-seq-len", str(max_seq_len), "--FC-devices", str(FC_devices), "--model-parallel", "--seqlen", str(seqlen), "--op-trace", "--GEMV", "reuse-GB", "--reuse-size", str(args.reuse_size), "--trace-file", main_path])
                     if args.inter_device_attention:
                         commands_generate_traces[-1].append("--inter-device-attention")
                     if args.kv_head_tp:
                         commands_generate_traces[-1].extend(["--kv-head-tp", "--tp-device-role", "main"])
+                    if args.phase_breakdown:
+                        commands_generate_traces[-1].append("--phase-breakdown")
                 # KV-head TP ranks are compute-symmetric.  One fresh trace is
                 # simulated and replicated across all TP ranks in postprocess;
                 # only their CXL ingress/egress energy differs.
@@ -843,6 +865,15 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
         raise FileNotFoundError(f"Simulation log is missing or empty: {path}. Re-run --generate_trace --simulate_trace before --update_csv.")
     stats = command_processor(path)
     main_pim_latency = stats["latency"]
+    attention_pim_latency = None
+    ffn_pim_latency = None
+    if args.phase_breakdown:
+        attention_cycles = read_attention_end_cycles(path)
+        total_cycles = stats["cycles"]
+        if not 0 < attention_cycles < total_cycles:
+            raise ValueError(f"Invalid Attention checkpoint {attention_cycles} / {total_cycles} cycles in {path}")
+        attention_pim_latency = attention_cycles * stats["tCK_ps"] / 1e9
+        ffn_pim_latency = (total_cycles - attention_cycles) * stats["tCK_ps"] / 1e9
     helper_path = None
     helper_stats = None
     helper_pim_latency = 0.0
@@ -916,6 +947,37 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
     else:
         critical_local_latency = pim_latency + acc_latency
         transformer_block_latency = critical_local_latency + cxl_latency
+    stage_latency = {}
+    if args.phase_breakdown:
+        attention_acc_keys = {
+            "Softmax_latency", "FlashAttention_latency", "RotEmbed_latency",
+            "QReduction_latency", "KVReduction_latency", "SVReduction_latency",
+        }
+        rmsnorm = main_acc_latency_dict["RMSNorm_latency"] / 2.0
+        attention_acc_latency = (
+            rmsnorm + sum(value for key, value in main_acc_latency_dict.items() if key in attention_acc_keys)
+        ) * blocks_per_device * args.batch_size
+        ffn_acc_latency = (
+            rmsnorm + main_acc_latency_dict.get("EWMULActivation_latency", 0.0)
+        ) * blocks_per_device * args.batch_size
+        if not math.isclose(attention_acc_latency + ffn_acc_latency, main_acc_latency, abs_tol=1e-12):
+            raise ValueError("Unassigned analytical accelerator latency in phase breakdown")
+        attention_cxl_latency = tp_collective_cxl_latency / 2.0
+        ffn_cxl_latency = tp_collective_cxl_latency / 2.0 + pp_handoff_cxl_latency
+        attention_stage_latency = attention_pim_latency + attention_acc_latency + attention_cxl_latency
+        ffn_stage_latency = ffn_pim_latency + ffn_acc_latency + ffn_cxl_latency
+        if not math.isclose(attention_stage_latency + ffn_stage_latency, transformer_block_latency, abs_tol=1e-10):
+            raise ValueError("Attention and FFN stages do not reconstruct TransformerBlock latency")
+        stage_latency = {
+            "Attention PIM latency": attention_pim_latency,
+            "FFN PIM latency": ffn_pim_latency,
+            "Attention Acc latency": attention_acc_latency,
+            "FFN Acc latency": ffn_acc_latency,
+            "Attention CXL latency": attention_cxl_latency,
+            "FFN CXL latency": ffn_cxl_latency,
+            "Attention stage latency": attention_stage_latency,
+            "FFN stage latency": ffn_stage_latency,
+        }
     token_latency = transformer_block_latency * TransformerBlock_number[args.model] + embedding_latency_data
     if not args.decode_only:
         token_latency += InOut_latency
@@ -1127,6 +1189,7 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
         'PP handoff CXL payload (bits/block)': pp_handoff_PCIE,
         'DRAM energy model': args.dram_energy_model,
     }
+    new_result.update(stage_latency)
     new_result_df = pd.DataFrame([new_result])
     return new_result_df
 

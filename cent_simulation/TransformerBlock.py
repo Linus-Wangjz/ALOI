@@ -1293,7 +1293,7 @@ class TransformerBlock(PIM):
     def Vector_Matrix_Mul_output_systolic_tp_only_trace(
         self, row_index_matrix, seqlen, timing="breakdown_sa_output"
     ):
-        """Local SV trace using both independent 8-lane burst halves."""
+        """Local SV trace using both independent half-word operands."""
 
         layout = self.systolic_tp_layout
         if layout is None:

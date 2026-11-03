@@ -15,6 +15,7 @@ import pandas as pd
 
 
 BF16_BYTES = 2
+FP8_BYTES = 1
 
 # Tensor shapes follow function_sim.py.  Llama2's input and output embedding
 # matrices are accounted separately because its weights are not tied.
@@ -42,7 +43,9 @@ def gibibytes(value: float) -> float:
     return value / (1024**3)
 
 
-def _layer_weight_bytes(spec: dict[str, int]) -> int:
+def _layer_weight_bytes(
+    spec: dict[str, int], element_bytes: int = BF16_BYTES
+) -> int:
     dim = spec["dim"]
     kv_dim = spec["kv_heads"] * spec["head_dim"]
     elements = (
@@ -52,15 +55,21 @@ def _layer_weight_bytes(spec: dict[str, int]) -> int:
         + 3 * spec["ffn_dim"] * dim  # W1, W3, W2
         + 2 * dim  # two RMSNorm vectors
     )
-    return elements * BF16_BYTES
+    return elements * element_bytes
 
 
-def _endpoint_weight_bytes(spec: dict[str, int]) -> int:
-    return spec["vocab_size"] * spec["dim"] * BF16_BYTES
+def _endpoint_weight_bytes(
+    spec: dict[str, int], element_bytes: int = BF16_BYTES
+) -> int:
+    return spec["vocab_size"] * spec["dim"] * element_bytes
 
 
-def _kv_bytes_per_layer(spec: dict[str, int], context_window: int) -> int:
-    return 2 * context_window * spec["kv_heads"] * spec["head_dim"] * BF16_BYTES
+def _kv_bytes_per_layer(
+    spec: dict[str, int],
+    context_window: int,
+    element_bytes: int = BF16_BYTES,
+) -> int:
+    return 2 * context_window * spec["kv_heads"] * spec["head_dim"] * element_bytes
 
 
 def capacity_for_layout(
@@ -71,6 +80,7 @@ def capacity_for_layout(
     device_capacity_bytes: int,
     reserve_bytes: int = 0,
     shard_kv_cache_across_tp: bool = True,
+    element_bytes: int = BF16_BYTES,
 ) -> dict[str, float | int]:
     """Return the limiting per-device capacity for a balanced PP/TP layout.
 
@@ -83,13 +93,15 @@ def capacity_for_layout(
         raise ValueError(f"unknown model '{model}'")
     if pp <= 0 or tp <= 0:
         raise ValueError("PP and TP must be positive")
+    if element_bytes <= 0:
+        raise ValueError("element_bytes must be positive")
     spec = MODEL_SPECS[model]
     layers = spec["layers"]
     base, remainder = divmod(layers, pp)
     layers_per_stage = [base + (stage < remainder) for stage in range(pp)]
-    per_layer_kv = _kv_bytes_per_layer(spec, context_window)
-    layer_weights = _layer_weight_bytes(spec)
-    endpoint_weights = _endpoint_weight_bytes(spec)
+    per_layer_kv = _kv_bytes_per_layer(spec, context_window, element_bytes)
+    layer_weights = _layer_weight_bytes(spec, element_bytes)
+    endpoint_weights = _endpoint_weight_bytes(spec, element_bytes)
 
     capacities: list[tuple[int, int, int, int]] = []
     for stage, layer_count in enumerate(layers_per_stage):

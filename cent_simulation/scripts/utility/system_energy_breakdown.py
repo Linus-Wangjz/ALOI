@@ -10,7 +10,12 @@ from typing import Mapping
 import pandas as pd
 
 import run_sim as simulator
-from tp_mapping import KVHeadTPLayout, SystolicTPLayout, kv_head_tp_shape
+from tp_mapping import (
+    KVHeadTPLayout,
+    SystolicTPLayout,
+    kv_head_tp_shape,
+    pim_precision_geometry,
+)
 from utils import embedding_size, ffn_size, gqa_factor, n_heads
 
 
@@ -69,6 +74,22 @@ SYSTEM_ENERGY_GROUPS = OrderedDict(
 )
 WAITING_COMPONENTS = ("Trace-external waiting", "Pipeline-bubble waiting")
 ENERGY_COMPONENTS = tuple(SYSTEM_ENERGY_GROUPS) + WAITING_COMPONENTS
+
+
+def component_breakdown_figure_width(bar_count: int) -> float:
+    """Size a stacked-breakdown canvas to its actual number of bars.
+
+    The previous 12.8-inch width targeted the largest campaign (18 bars).
+    It made one-bar FP8 plots unnecessarily wide and shrank their labels.
+    """
+
+    return max(6.4, 5.6 + 0.4 * bar_count)
+
+
+def component_breakdown_bar_width(bars_per_context: int) -> float:
+    """Keep a one-bar component stack visually proportional to its group."""
+
+    return min(0.20, 0.12 + 0.02 * bars_per_context)
 
 
 def _display_path(path: Path, project_root: Path) -> str:
@@ -161,6 +182,7 @@ def _kv_head_energy(
     """Rebuild run_sim's symmetric-rank KV-head TP energy aggregation."""
 
     is_systolic = _bool(source.get("Systolic pim", False))
+    geometry = pim_precision_geometry(str(source.get("Precision", "BF16")))
     systolic_dim = int(source.get("Systolic dim", 1))
     channel_count = int(source["Channels per device"])
     local_heads = n_heads[model] // tp
@@ -199,6 +221,8 @@ def _kv_head_energy(
             banks_per_channel=int(source["Banks per device"]),
             max_seq_len=int(source["Context window"]),
             systolic_height=systolic_dim,
+            dram_columns=geometry["dram_columns"],
+            burst_length=geometry["burst_length"],
         )
         reduction_adds = sum(layout.pnm_reduction_adds(seqlen).values())
         ewmul_enabled = _bool(source.get("EWMUL PNM effective", False))
@@ -208,6 +232,9 @@ def _kv_head_energy(
             num_channels=channel_count,
             banks_per_channel=int(source["Banks per device"]),
             max_seq_len=int(source["Context window"]),
+            dram_columns=geometry["dram_columns"],
+            burst_length=geometry["burst_length"],
+            k_contexts_per_row=geometry["dram_columns"] // shape.head_dim,
         )
         reduction_adds = layout.v_reduction_adds(seqlen)
         ewmul_enabled = _bool(source.get("EWMUL PNM effective", False))
@@ -290,6 +317,8 @@ def rebuild_physical_energy(
         )
         if _bool(source.get("Flash attention", False)):
             variant += f"_flash_{int(source['Flash attention block size'])}"
+        if str(source.get("Precision", "BF16")) == "FP8":
+            variant += "_fp8"
         main_log = (
             log_root / variant / "model_parallel_kv_head_main" / model
             / f"trace_{tp}_FC_devices_seqlen_{seqlen}.txt.log"
@@ -526,7 +555,8 @@ def plot_selected_component_breakdown(
         raise ValueError("implicit_architecture is only valid without Architecture")
     short_memory = {"GDDR6": "G6", "LPDDR4X_nCCD2": "X2", "LPDDR4X_nCCD6": "X6"}
     plt.style.use("seaborn-v0_8-whitegrid")
-    bar_width, memory_step, architecture_stride, context_stride = 0.20, 0.24, 1.02, 2.65
+    memory_step, architecture_stride, context_stride = 0.24, 1.02, 2.65
+    bar_width = component_breakdown_bar_width(len(architectures) * len(memories))
     for model in models:
         model_rows = breakdown[breakdown["Model"] == model]
         x_positions: list[float] = []
@@ -539,7 +569,11 @@ def plot_selected_component_breakdown(
             for architecture_index, architecture in enumerate(architectures):
                 architecture_base = context_base + architecture_index * architecture_stride
                 architecture_centers.append(
-                    (architecture_base + memory_step, architecture.replace(" 4x16", ""))
+                    (
+                        architecture_base
+                        + (len(memories) - 1) * memory_step / 2,
+                        architecture.split(" 4x", 1)[0],
+                    )
                 )
                 for memory_index, memory in enumerate(memories):
                     mask = (model_rows["Context"] == context) & (
@@ -556,8 +590,19 @@ def plot_selected_component_breakdown(
                     x_positions.append(architecture_base + memory_index * memory_step)
                     labels.append(short_memory[memory])
                     ordered_rows.append(match.iloc[0])
-            context_centers.append((context_base + architecture_stride / 2 + memory_step, context))
-        fig, ax = plt.subplots(figsize=(12.8, 6.8))
+            context_centers.append(
+                (
+                    context_base
+                    + (
+                        (len(architectures) - 1) * architecture_stride
+                        + (len(memories) - 1) * memory_step
+                    )
+                    / 2,
+                    context,
+                )
+            )
+        figure_width = component_breakdown_figure_width(len(ordered_rows))
+        fig, ax = plt.subplots(figsize=(figure_width, 6.8))
         bottoms = [0.0] * len(ordered_rows)
         for component in ENERGY_COMPONENTS:
             values = [float(row[f"{component} {metric_suffix}"]) for row in ordered_rows]
@@ -568,6 +613,11 @@ def plot_selected_component_breakdown(
             bottoms = [base + value for base, value in zip(bottoms, values)]
         ax.set_xticks(x_positions, labels, fontsize=8)
         ax.tick_params(axis="x", length=0, pad=2)
+        horizontal_margin = max(0.25, bar_width * 1.4)
+        ax.set_xlim(
+            min(x_positions) - horizontal_margin,
+            max(x_positions) + horizontal_margin,
+        )
         for center, label in architecture_centers:
             ax.text(center, -0.105, label, ha="center", va="top", transform=ax.get_xaxis_transform(), fontsize=8)
         for center, label in context_centers:
@@ -580,6 +630,8 @@ def plot_selected_component_breakdown(
         ax.spines["top"].set_visible(False)
         ax.spines["right"].set_visible(False)
         handles, legend_labels = ax.get_legend_handles_labels()
+        legend_cols = 3 if figure_width < 8.0 else 5
+        legend_rows = math.ceil(len(ENERGY_COMPONENTS) / legend_cols)
         if external_title_legend:
             fig.suptitle(f"{model}: {title}", y=0.98, fontsize=13)
             fig.legend(
@@ -587,22 +639,32 @@ def plot_selected_component_breakdown(
                 legend_labels,
                 loc="upper center",
                 bbox_to_anchor=(0.5, 0.91),
-                ncols=5,
+                ncols=legend_cols,
                 frameon=False,
                 fontsize=8,
             )
-            fig.subplots_adjust(left=0.08, right=0.99, bottom=0.25, top=0.78)
+            fig.subplots_adjust(
+                left=0.08,
+                right=0.99,
+                bottom=0.25,
+                top=max(0.54, 0.96 - 0.05 * legend_rows),
+            )
         else:
             fig.legend(
                 handles,
                 legend_labels,
                 loc="upper center",
                 bbox_to_anchor=(0.5, 0.98),
-                ncols=5,
+                ncols=legend_cols,
                 frameon=False,
                 fontsize=8,
             )
-            fig.subplots_adjust(left=0.08, right=0.99, bottom=0.25, top=0.72)
+            fig.subplots_adjust(
+                left=0.08,
+                right=0.99,
+                bottom=0.25,
+                top=max(0.54, 0.92 - 0.05 * legend_rows),
+            )
         stem = output.parent / f"{output.name}_{model.replace('Llama2-', '').lower()}"
         for suffix in ("png", "pdf"):
             fig.savefig(stem.with_suffix(f".{suffix}"), dpi=220, bbox_inches="tight")
@@ -654,7 +716,7 @@ def plot_selected_component_breakdown_context_subplots(
             for architecture_index, architecture in enumerate(architectures):
                 architecture_base = architecture_index * architecture_stride
                 architecture_centers.append(
-                    (architecture_base + memory_step, architecture.replace(" 4x16", ""))
+                    (architecture_base + memory_step, architecture.split(" 4x", 1)[0])
                 )
                 for memory_index, memory in enumerate(memories):
                     match = model_rows[

@@ -42,6 +42,7 @@ def get_args():
     parser.add_argument("--trace-activation", action="store_true")
     parser.add_argument("--op-trace", action="store_true", help="Print operation traces")
     parser.add_argument("--only-trace", action="store_true", help="Skip functional verification and only generate memory trace")
+    parser.add_argument("--phase-breakdown", action="store_true", help="Emit an Attention/FFN synchronization checkpoint in the trace")
     parser.add_argument("--embedding", action="store_true", help="generate traces for input embedding")
     parser.add_argument("--Llama", action="store_true", help="Llama2 7B and 13B")
     parser.add_argument("--Llama-GQA", action="store_true", help="Llama2 70B and Llama3")
