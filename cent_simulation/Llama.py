@@ -997,6 +997,8 @@ class TransformerBlockLlama(TransformerBlock):
         if self.trace_norm:
             self.EWADD_only_trace(self.dim // self.burst_length)
 
+        self.attention_end_only_trace()
+
         if self.trace_norm and not self.EWMUL_PNM:
             # RMSNorm   sa.pow   MAC_ABK
             self.time["WR_SBK"] += self.timing_constant["WR_SBK"] + self.dim // self.burst_length
@@ -1323,6 +1325,8 @@ class TransformerBlockLlama(TransformerBlock):
         if self.trace_norm:
             self.EWADD_only_trace(self.dim // self.burst_length)
 
+        self.attention_end_only_trace()
+
         # Move the second RMSNorm and activation work to PNM.
         ffn_dim = self.w1.shape[0]
         if self.trace_fc_ffn:
@@ -1420,6 +1424,8 @@ class TransformerBlockLlama(TransformerBlock):
         # The first full-hidden-vector TP all-reduce is modeled by run_sim.
         if self.trace_norm:
             self.EWADD_only_trace(self.dim // self.burst_length)
+
+        self.attention_end_only_trace()
 
         if self.trace_fc_ffn:
             self.Vector_Matrix_Mul_weight_systolic_tp_only_trace(

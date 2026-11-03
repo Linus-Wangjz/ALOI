@@ -106,6 +106,27 @@ class DoubleBufferingTests(unittest.TestCase):
             for channel in channels[2:]:
                 self.assertEqual(validate_events(channel)["gb_generations"], 0)
 
+    def test_phase_checkpoint_retires_all_async_descriptors(self):
+        import run_sim
+        attention = workload(2).replace("AiM SYNC\nAiM EOC\n", "")
+        marker_id = len(attention.splitlines())
+        trace = attention + "# PHASE attention_end\n" + workload(2)
+        for width in (1, 32):
+            with self.subTest(width=width), TemporaryDirectory() as temp:
+                root = Path(temp)
+                stats, channels = self.simulate(root, trace=trace, width=width)
+                checkpoint = run_sim.read_attention_end_cycles(root / "result.log")
+                self.assertLess(checkpoint, stats["memory_system_cycles"])
+                for channel in channels:
+                    self.assertEqual(validate_events(channel)["gb_generations"], 4)
+                    before = [e["cycle"] for e in channel if e["event"] == "complete"
+                              and 0 <= e["host_id"] < marker_id]
+                    after = [e["cycle"] for e in channel if e["event"] == "issue"
+                             and e["host_id"] > marker_id]
+                    self.assertTrue(before and after)
+                    self.assertLessEqual(max(before), checkpoint)
+                    self.assertGreaterEqual(min(after), checkpoint)
+
     def test_register_io_and_memory_preserve_work_and_burst_spacing(self):
         text = "".join(f"{direction} MEM {ch} 0 0\n" for direction in ("W", "R")
                        for _ in range(8) for ch in range(32))

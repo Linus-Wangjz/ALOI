@@ -102,6 +102,24 @@ class ChannelConcurrencyTests(unittest.TestCase):
             self.assertTrue(all(b - a == 8 for a, b in zip(gb, gb[1:])))
             self.assertTrue(all(b - a == 2 for a, b in zip(mac, mac[1:])))
 
+    def test_phase_checkpoint_drains_all_channels_with_both_issue_widths(self):
+        import run_sim
+        first = "".join(f"W MEM {channel} 0 0\n" for channel in range(32))
+        second = "".join(f"W MEM {channel} 0 1\n" for channel in range(32))
+        trace = first + "# PHASE attention_end\n" + second + "AiM EOC\n"
+        for concurrent in (False, True):
+            with self.subTest(concurrent=concurrent), TemporaryDirectory() as temp:
+                root = Path(temp)
+                stats, events = self.simulate(root, concurrent, trace)
+                checkpoint = run_sim.read_attention_end_cycles(root / "result.log")
+                self.assertGreater(checkpoint, 0)
+                self.assertLess(checkpoint, stats["memory_system_cycles"])
+                for channel in events:
+                    writes = [e.clock for e in channel if e.command == "WR"]
+                    self.assertEqual(len(writes), 2)
+                    self.assertLessEqual(writes[0] + 19, checkpoint)
+                    self.assertGreaterEqual(writes[1], checkpoint)
+
     def test_different_channels_read_and_write_streams_overlap(self):
         initial = "".join(f"W MEM {channel} 0 0\n" for channel in range(32)) + "AiM SYNC\n"
         mixed = "".join(f"{'R' if channel < 16 else 'W'} MEM {channel} 0 0\n"

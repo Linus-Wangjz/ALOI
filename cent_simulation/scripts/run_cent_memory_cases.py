@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate CENT GDDR6 and LPDDR4X nCCD result CSVs."""
+"""Generate CENT GDDR6/LPDDR4X BF16 or LPDDR4X-only FP8 result CSVs."""
 
 from __future__ import annotations
 
@@ -390,8 +390,6 @@ def run_model_case(
         "--dram-energy-model", args.dram_energy_model,
         "--simulation_result_path", str(case["csv"]),
         "--model", model,
-        "--generate_trace",
-        "--simulate_trace",
         "--update_csv",
         "--num_devices", str(model_run_config["source_devices"]),
         "--PCIE_lanes", str(model_run_config["pcie_lanes"]),
@@ -402,6 +400,10 @@ def run_model_case(
         cmd.append("--channel-concurrency")
     if getattr(args, "record_command_trace", False):
         cmd.append("--record-command-trace")
+    if getattr(args, "phase_breakdown", False):
+        cmd.append("--phase-breakdown")
+    if not getattr(args, "power_refresh_only", False):
+        cmd.extend(["--generate_trace", "--simulate_trace"])
     if args.include_embedding:
         cmd.append("--process_results")
     else:
@@ -473,7 +475,12 @@ def run_model_case(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--precision", choices=("bf16", "fp8"), default="bf16")
+    parser.add_argument(
+        "--precision",
+        choices=("bf16", "fp8"),
+        default="bf16",
+        help="PIM precision; fp8 is supported only by --kv-head-tp-systolic on LPDDR4X",
+    )
     parser.add_argument("--channel-concurrency", action="store_true")
     parser.add_argument("--record-command-trace", action="store_true")
     parser.add_argument("--models", default="Llama2-7B,Llama2-70B")
@@ -539,6 +546,7 @@ def main() -> int:
         ),
     )
     parser.add_argument("--include-embedding", action="store_true", help="Include embedding traces/latency. Default is decode-only.")
+    parser.add_argument("--phase-breakdown", action="store_true", help="Measure Attention and FFN stage latency for KV-head TP systolic runs")
     parser.add_argument("--dram-energy-model", choices=["legacy", "trace-based"], default="legacy")
     parser.add_argument("--lpddr4-base-yaml", type=Path, default=ROOT / "aim_simulator/test/example_LPDDR4.yaml")
     parser.add_argument("--gddr6-yaml", type=Path, default=ROOT / "aim_simulator/test/example_GDDR6.yaml")
@@ -567,7 +575,8 @@ def main() -> int:
         action="store_true",
         help=(
             "Run only the standard Device-Channel-group-Bank KV-head TP mapping "
-            "with SA=4x16, batch=1,2,3,4, TP=1,2,4,8, and midpoint contexts. Writes "
+            "with SA=4x16 (BF16) or SA=4x32 (FP8), batch=1,2,3,4, "
+            "TP=1,2,4,8, and midpoint contexts. Writes "
             "to kv_head_tp_systolic_all_context roots unless overridden."
         ),
     )
@@ -612,7 +621,21 @@ def main() -> int:
             "values must fit the four-row systolic array."
         ),
     )
-    parser.add_argument("--cases", help="Comma-separated subset of cases: GDDR6,LPDDR4X_nCCD2,LPDDR4X_nCCD6")
+    parser.add_argument(
+        "--cases",
+        help=(
+            "Comma-separated subset of cases; FP8 accepts LPDDR4X_nCCD2/"
+            "LPDDR4X_nCCD6 and their _MICRON power-refresh variants"
+        ),
+    )
+    parser.add_argument(
+        "--power-refresh-only",
+        action="store_true",
+        help=(
+            "Reuse existing Ramulator logs and only recalculate CSV energy/power. "
+            "This is intended for alternate DRAM IDD tables such as Micron."
+        ),
+    )
     parser.add_argument("--skip-pipeline", action="store_true")
     parser.add_argument(
         "--include-pipeline",
@@ -632,10 +655,12 @@ def main() -> int:
         raise ValueError("KV-head TP modes and --master-attention are mutually exclusive")
     if args.kv_head_tp and args.kv_head_tp_systolic:
         raise ValueError("--kv-head-tp and --kv-head-tp-systolic are mutually exclusive")
-    if args.flash_attention and not args.kv_head_tp_systolic:
-        raise ValueError("--flash-attention requires --kv-head-tp-systolic")
+    if args.phase_breakdown and (not args.kv_head_tp_systolic or args.include_embedding):
+        raise ValueError("--phase-breakdown requires decode-only --kv-head-tp-systolic")
     if args.precision == "fp8" and not args.kv_head_tp_systolic:
         raise ValueError("--precision fp8 requires --kv-head-tp-systolic")
+    if args.flash_attention and not args.kv_head_tp_systolic:
+        raise ValueError("--flash-attention requires --kv-head-tp-systolic")
     if args.channel_concurrency and not args.kv_head_tp_systolic:
         raise ValueError("--channel-concurrency currently requires --kv-head-tp-systolic")
     if args.pipelined_softmax and not args.kv_head_tp_systolic:
@@ -670,18 +695,25 @@ def main() -> int:
             ]
             if invalid_batches:
                 raise ValueError(
-                    "SA=4x16 batch sizes must be in [1, 4]: "
+                    "SA=4x16/4x32 batch sizes must be in [1, 4]: "
                     f"{invalid_batches}"
                 )
+            systolic_variant = (
+                "systolic_4x32_fp8"
+                if args.precision == "fp8"
+                else "systolic_4x16"
+            )
             if args.output_root == OUTPUT_ROOT:
                 args.output_root = (
                     OUTPUT_ROOT
-                    / "kv_head_tp_systolic_all_context/raw" / systolic_variant
+                    / "kv_head_tp_systolic_all_context/raw"
+                    / systolic_variant
                 )
             if args.trace_root == TRACE_ROOT:
                 args.trace_root = (
                     TRACE_ROOT
-                    / "kv_head_tp_systolic_all_context" / systolic_variant
+                    / "kv_head_tp_systolic_all_context"
+                    / systolic_variant
                 )
         else:
             if args.output_root == OUTPUT_ROOT:
@@ -803,7 +835,31 @@ def main() -> int:
             "csv": args.output_root / "LPDDR4X" / f"simulation_results_decode_only{csv_suffix}_nCCD6.csv",
             "dram_power_impl": "LPDDR4X",
         },
+        {
+            "name": "LPDDR4X_nCCD2_MICRON",
+            "num_banks": 8,
+            "config": lpddr4x_nccd2_yaml,
+            "trace_root": args.trace_root / trace_variant / "LPDDR4X",
+            "log_root": args.output_root / "LPDDR4X" / f"ramulator{csv_suffix}_nCCD2",
+            "csv": args.output_root / "LPDDR4X" / f"simulation_results_decode_only{csv_suffix}_nCCD2_micron.csv",
+            "dram_power_impl": "LPDDR4X_MICRON",
+        },
+        {
+            "name": "LPDDR4X_nCCD6_MICRON",
+            "num_banks": 8,
+            "config": lpddr4x_nccd6_yaml,
+            "trace_root": args.trace_root / trace_variant / "LPDDR4X",
+            "log_root": args.output_root / "LPDDR4X" / f"ramulator{csv_suffix}_nCCD6",
+            "csv": args.output_root / "LPDDR4X" / f"simulation_results_decode_only{csv_suffix}_nCCD6_micron.csv",
+            "dram_power_impl": "LPDDR4X_MICRON",
+        },
     ]
+    if args.precision == "fp8":
+        cases = [
+            case
+            for case in cases
+            if case["dram_power_impl"] in {"LPDDR4X", "LPDDR4X_MICRON"}
+        ]
     case_by_name = {str(case["name"]): case for case in cases}
     if args.cases:
         requested_cases = set(parse_csv_list(args.cases))
@@ -828,7 +884,12 @@ def main() -> int:
         batch_count=(len(args.batch_sizes) if args.kv_head_tp_systolic else 1),
     )
     if job_count is not None:
-        print(f"[plan] exact Ramulator jobs={job_count}")
+        plan_label = (
+            "CSV energy refresh points"
+            if args.power_refresh_only
+            else "exact Ramulator jobs"
+        )
+        print(f"[plan] {plan_label}={job_count}")
 
     for case in cases:
         print(f"[case] {case['name']}", flush=True)

@@ -61,6 +61,7 @@ class PIM():
             else:
                 self.pim_device["dimm_0"] = DIMM(args)
         self.op_trace = args.op_trace
+        self.phase_breakdown = getattr(args, "phase_breakdown", False)
         self.systolic_pim = args.systolic_pim
         self.batch_size = args.batch_size
         self.trace_file = args.trace_file
@@ -389,6 +390,12 @@ class PIM():
     
     def SYNC_only_trace(self):
         self.file.write("AiM SYNC\n")
+
+    def attention_end_only_trace(self):
+        if self.phase_breakdown:
+            # AiMTrace turns this comment into a SYNC checkpoint. The marker
+            # belongs after the Attention residual and before the FFN norm.
+            self.file.write("# PHASE attention_end\n")
     
     def finish(self):
         self.file.write("AiM EOC\n")

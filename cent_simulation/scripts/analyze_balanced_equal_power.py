@@ -16,7 +16,7 @@ import json
 import math
 from pathlib import Path
 import sys
-from typing import Iterable
+from typing import Iterable, Mapping
 
 import pandas as pd
 
@@ -171,6 +171,7 @@ def capacity_for_candidate(
     tp: int,
     device_capacity_gib: float,
     reserve_gib: float,
+    element_bytes: int = 2,
 ) -> dict[str, float | int]:
     return capacity_for_layout(
         model,
@@ -180,6 +181,7 @@ def capacity_for_candidate(
         int(device_capacity_gib * 2**30),
         int(reserve_gib * 2**30),
         shard_kv_cache_across_tp=True,
+        element_bytes=element_bytes,
     )
 
 
@@ -191,6 +193,7 @@ def tp_sweep_for_pp(
     reserve_gib: float,
     *,
     max_tp: int = 4096,
+    element_bytes: int = 2,
 ) -> list[tuple[int, dict[str, float | int]]]:
     """Evaluate TP=1,2,4,... through and including the first Bmax > PP."""
 
@@ -198,7 +201,13 @@ def tp_sweep_for_pp(
     tp = 1
     while tp <= max_tp:
         capacity = capacity_for_candidate(
-            model, context_window, pp, tp, device_capacity_gib, reserve_gib
+            model,
+            context_window,
+            pp,
+            tp,
+            device_capacity_gib,
+            reserve_gib,
+            element_bytes,
         )
         points.append((tp, capacity))
         if int(capacity["Max resident microbatch"]) > pp:
@@ -213,15 +222,23 @@ def sweep_envelope(
     device_capacity_gib: float,
     reserve_gib: float,
     tp_values: Iterable[int] | None = None,
+    element_bytes: int = 2,
+    *,
+    contexts: Mapping[str, Mapping[str, int]] | None = None,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for model in MODEL_CONFIG:
-        for context, context_config in CONTEXTS.items():
+        for context, context_config in (contexts if contexts is not None else CONTEXTS).items():
             window = int(context_config["window"])
             for pp in exact_pp_values(model):
                 if tp_values is None:
                     points = tp_sweep_for_pp(
-                        model, window, pp, device_capacity_gib, reserve_gib
+                        model,
+                        window,
+                        pp,
+                        device_capacity_gib,
+                        reserve_gib,
+                        element_bytes=element_bytes,
                     )
                 else:
                     points = [
@@ -234,6 +251,7 @@ def sweep_envelope(
                                 tp,
                                 device_capacity_gib,
                                 reserve_gib,
+                                element_bytes,
                             ),
                         )
                         for tp in sorted(set(int(value) for value in tp_values))
@@ -277,11 +295,15 @@ def integer_dp_choices(target_power_w: float, replica_power_w: float) -> list[tu
     return choices
 
 
-def load_dgx(profile_path: Path) -> dict[tuple[str, str], dict[str, float | int]]:
+def load_dgx(
+    profile_path: Path,
+    *,
+    contexts: Mapping[str, Mapping[str, int]] | None = None,
+) -> dict[tuple[str, str], dict[str, float | int]]:
     df = pd.read_csv(profile_path)
     result: dict[tuple[str, str], dict[str, float | int]] = {}
     for model, model_config in MODEL_CONFIG.items():
-        for context, context_config in CONTEXTS.items():
+        for context, context_config in (contexts if contexts is not None else CONTEXTS).items():
             window = int(context_config["window"])
             subset = df[
                 (df["model"] == model_config["gpu_model"])
@@ -332,6 +354,8 @@ def load_tp_sources(
     flash_attention_block_size: int | None = None,
     pipelined_softmax: bool | None = None,
     ewmul_pnm_effective: bool | None = None,
+    precision: str | None = None,
+    context_config: Mapping[str, int] | None = None,
 ) -> dict[int, pd.Series]:
     if not path.exists():
         raise FileNotFoundError(f"missing source CSV: {path}")
@@ -340,7 +364,7 @@ def load_tp_sources(
     if missing:
         raise ValueError(f"{path} is missing required columns: {', '.join(missing)}")
     model_config = MODEL_CONFIG[model]
-    context_config = CONTEXTS[context]
+    context_config = context_config if context_config is not None else CONTEXTS[context]
     source_devices = int(model_config["source_devices"])
     subset = df[
         (df["Model"] == model)
@@ -350,6 +374,12 @@ def load_tp_sources(
         & (df["Attention mapping"] == attention_mapping)
         & (df["DRAM energy model"] == dram_energy_model)
     ].copy()
+    if precision is not None:
+        if "Precision" not in subset.columns:
+            if precision != "BF16":
+                raise ValueError(f"{path} is missing Precision provenance")
+        else:
+            subset = subset[subset["Precision"] == precision]
     if batch_size is not None:
         if "Batch size" not in subset.columns:
             raise ValueError(f"{path} is missing Batch size")

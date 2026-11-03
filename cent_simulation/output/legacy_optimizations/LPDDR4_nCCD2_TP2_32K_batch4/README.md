@@ -30,7 +30,9 @@ Full optimizations reduce block latency by 28.65% against this baseline.
   log, all 32 channel command records, backend configuration, resolved timing,
   provenance, and source/binary hashes. `BUILD_MANIFEST.json` and
   `RUN_PROVENANCE.md` describe the original run, not a new simulation performed
-  when this archive was committed.
+  when this archive was committed. The remote phase-checkpoint/analysis merge
+  and the subsequent active-queue fence fix have not been benchmarked in these
+  archived totals.
 - `interface_correction_*` and `kernel_interface_correction.csv` preserve the
   before/after comparison with the superseded width32/prefetch8/nBL4 interface.
   Those older metrics are historical, not the current reference totals.
@@ -50,5 +52,5 @@ python scripts/run_legacy_optimization_case.py --variants baseline full
 The runner generates paths for the current checkout and fingerprints the
 current sources and binaries. A rerun may therefore create different build
 directories. The separate double-buffer experiment is documented in
-[the committed double-buffer comparison](../../../results/double_buffering_fp8_32k_batch4/summary.txt)
+[the committed double-buffer comparison](https://github.com/Linus-Wangjz/ALOI/blob/double-buffering/cent_simulation/results/double_buffering_fp8_32k_batch4/summary.txt)
 on the `double-buffering` branch.

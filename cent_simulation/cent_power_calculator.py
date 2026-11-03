@@ -360,7 +360,10 @@ def get_args():
     parser.add_argument("--ptiming", type=str, help="Additional PIM-stage timing YAML")
     parser.add_argument("--pcmd-trace", type=str, help="Additional PIM-stage command-trace prefix")
     parser.add_argument("--dram-energy-model", choices=DRAM_ENERGY_MODELS, default="legacy")
-    parser.add_argument("--dram-power-impl", choices=["GDDR6", "LPDDR4", "LPDDR4X"])
+    parser.add_argument(
+        "--dram-power-impl",
+        choices=["GDDR6", "LPDDR4", "LPDDR4X", "LPDDR4_MICRON", "LPDDR4X_MICRON"],
+    )
     parser.add_argument("--head", type=int, required=True)
     parser.add_argument("--hidden", type=int, required=True)
     parser.add_argument("--fc", type=int, required=True)
