@@ -69,7 +69,7 @@ def get_args():
     parser.add_argument("--inter-device-attention", action="store_true")
     parser.add_argument("--full-accelerator-softmax", action="store_true")
     parser.add_argument("--flash-attention", action="store_true")
-    parser.add_argument("--flash-attention-block-size", type=int, default=1024)
+    parser.add_argument("--flash-attention-block-size", type=int, default=2048)
     parser.add_argument(
         "--EWMUL-PNM",
         "--EWMUL_PNM",

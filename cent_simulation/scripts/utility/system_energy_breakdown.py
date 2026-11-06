@@ -246,6 +246,9 @@ def _kv_head_energy(
             + local_hidden // gqa_factor[model]
             + 2 * layout.shape.local_ffn_dim
         )
+        # Rows produced before PNM residual modeling have no residual columns.
+        if float(source.get("Attention residual latency") or 0.0) > 0.0:
+            reduction_adds += 2 * embedding_size[model]
     pnm_energy = simulator.kv_head_tp_pnm_dynamic_energy(
         main_stat,
         reduction_adds=reduction_adds,

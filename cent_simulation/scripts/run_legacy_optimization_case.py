@@ -12,13 +12,16 @@ import sys
 
 CENT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CENT))
-from cycle_breakdown import analyze_case, read_case, render_summary, write_report  # noqa: E402
+from cycle_breakdown import analyze_case, read_case, render_summary, write_kernel_table, write_report  # noqa: E402
 
 VARIANTS = {
     "baseline": [],
     "parallel": ["--channel-concurrency"],
     "flash": ["--flash-attention"],
     "full": ["--channel-concurrency", "--flash-attention", "--pipelined-softmax"],
+    # Isolates the default FlashAttention block size (2048) from other changes.
+    "full_flash1024": ["--channel-concurrency", "--flash-attention",
+                       "--flash-attention-block-size", "1024", "--pipelined-softmax"],
 }
 LPDDR4_ORGANIZATION = {"channels": 32, "channel_width_bits": 16, "dq_bits": 16,
                       "prefetch": 16, "transaction_bytes": 32}
@@ -121,6 +124,9 @@ def publish_comparison(root, comparison, commands):
         writer.writeheader()
         writer.writerows(comparison)
     (root / "commands.json").write_text(json.dumps(commands, indent=2) + "\n")
+    if all(variant in reports for variant in ("baseline", "full")):
+        write_kernel_table({"baseline": reports["baseline"], "optimized": reports["full"]},
+                           root / "kernel_breakdown.csv")
     lines = ["Llama2-70B FP8 SA4x32; LPDDR4 nCCD2; TP2; batch4; window32768; active30976",
              "Scope: one representative rank, one Transformer block, one batch group.",
              "Baseline: FlashAttention OFF; pipelined Softmax OFF; channel concurrency OFF.",

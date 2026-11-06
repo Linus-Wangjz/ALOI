@@ -176,7 +176,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--flash-attention-block-size",
         type=int,
-        default=1024,
+        default=2048,
         help="Required FlashAttention block size when --flash-attention is set.",
     )
     parser.add_argument(

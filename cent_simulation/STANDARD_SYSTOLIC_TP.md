@@ -154,11 +154,11 @@ MPLCONFIGDIR=/tmp/cent_mpl /home/linuswang/miniforge3/envs/cent/bin/python \
   scripts/run_cent_memory_cases.py --kv-head-tp-systolic \
   --models Llama2-7B,Llama2-70B \
   --cases GDDR6,LPDDR4X_nCCD2,LPDDR4X_nCCD6 \
-  --EWMUL_PNM --flash-attention --flash-attention-block-size 1024
+  --EWMUL_PNM --flash-attention --flash-attention-block-size 2048
 
 MPLCONFIGDIR=/tmp/cent_mpl /home/linuswang/miniforge3/envs/cent/bin/python \
   scripts/analyze_kv_head_tp_systolic_all_context.py \
-  --flash-attention --flash-attention-block-size 1024
+  --flash-attention --flash-attention-block-size 2048
 ```
 
 `update_csv` retains rows with explicitly incompatible legacy `--activation`

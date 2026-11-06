@@ -98,7 +98,7 @@ def get_args():
         action="store_true",
         help="Use cent_dev-style block FlashAttention without score DRAM workspace",
     )
-    parser.add_argument("--flash_attention_block_size", "--flash-attention-block-size", dest="flash_attention_block_size", type=int, default=1024)
+    parser.add_argument("--flash_attention_block_size", "--flash-attention-block-size", dest="flash_attention_block_size", type=int, default=2048)
     parser.add_argument(
         "--pipelined_softmax",
         "--pipelined-softmax",
@@ -801,6 +801,17 @@ def calculate_acc_latency(args, seqlen, tp=1, device_role="main"):
             * ACCEL_CYCLE["VEC_MUL"]
             / float(FREQ / KILO)
         )
+        # AiM treats ISR_EWADD as a no-op, so the two full-hidden residual
+        # adds run on the PNM 16-lane vector-add unit, like EWMUL above.
+        residual_add_latency = (
+            rms_hidden
+            / 16.00
+            / args.num_channels
+            * ACCEL_CYCLE["VEC_ADD"]
+            / float(FREQ / KILO)
+        )
+        latency["AttentionResidual_latency"] = residual_add_latency
+        latency["FFNResidual_latency"] = residual_add_latency
     latency["RotEmbed_latency"] = float(latency["RotEmbed_latency"]) / float(FREQ / KILO)
     if args.kv_head_tp:
         shape = kv_head_tp_shape(
@@ -952,6 +963,7 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
         attention_acc_keys = {
             "Softmax_latency", "FlashAttention_latency", "RotEmbed_latency",
             "QReduction_latency", "KVReduction_latency", "SVReduction_latency",
+            "AttentionResidual_latency",
         }
         rmsnorm = main_acc_latency_dict["RMSNorm_latency"] / 2.0
         attention_acc_latency = (
@@ -959,6 +971,7 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
         ) * blocks_per_device * args.batch_size
         ffn_acc_latency = (
             rmsnorm + main_acc_latency_dict.get("EWMULActivation_latency", 0.0)
+            + main_acc_latency_dict.get("FFNResidual_latency", 0.0)
         ) * blocks_per_device * args.batch_size
         if not math.isclose(attention_acc_latency + ffn_acc_latency, main_acc_latency, abs_tol=1e-12):
             raise ValueError("Unassigned analytical accelerator latency in phase breakdown")
@@ -1060,6 +1073,8 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
             + local_hidden // gqa_factor[args.model]
             + 2 * local_ffn_elements
         )
+        # Attention and FFN residual adds share the reduction VEC_ADD path.
+        reduction_adds += 2 * embedding_size[args.model]
     pnm_energy = kv_head_tp_pnm_dynamic_energy(
         stats,
         reduction_adds=reduction_adds,
@@ -1168,6 +1183,8 @@ def load_data_point(args, seqlen, FC_devices, channels_per_block, PCIe_lanes_per
         'KV reduction latency': main_acc_latency_dict.get('KVReduction_latency', 0.0) * blocks_per_device * args.batch_size,
         'SV reduction latency': main_acc_latency_dict.get('SVReduction_latency', 0.0) * blocks_per_device * args.batch_size,
         'EWMUL activation latency': main_acc_latency_dict.get('EWMULActivation_latency', 0.0) * blocks_per_device * args.batch_size,
+        'Attention residual latency': main_acc_latency_dict.get('AttentionResidual_latency', 0.0) * blocks_per_device * args.batch_size,
+        'FFN residual latency': main_acc_latency_dict.get('FFNResidual_latency', 0.0) * blocks_per_device * args.batch_size,
         'Critical local latency': critical_local_latency,
         'TransformerBlock latency': transformer_block_latency,
         'Embedding latency': embedding_latency_data,

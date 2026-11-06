@@ -32,8 +32,10 @@ analysis updates or the active-queue fence fix.
 The [combined summary](cent_simulation/output/legacy_optimizations/LPDDR4_nCCD2_TP2_32K_batch4/summary.txt)
 includes every kernel's PIM/PNM/CXL contributions, command counts, and command
 gap details. PIM kernel gaps include waits; they are attribution estimates,
-not isolated arithmetic timings. **Residual/EWADD arithmetic is not yet
-modeled or charged.** Softmax overlap and PNM/CXL retain legacy formulas.
+not isolated arithmetic timings. **These archived results do not charge
+Residual/EWADD arithmetic.** New EWMUL_PNM runs charge both residual adds to the
+PNM VEC_ADD unit, because AiM `ISR_EWADD` is a no-op. Softmax overlap and
+PNM/CXL retain legacy formulas.
 
 The `main` branch uses the single-buffer `AiM` profile. The `double-buffering`
 branch additionally implements the opt-in `AiMAsync`
@@ -105,7 +107,7 @@ unless the user requests a historical baseline or an ablation experiment:
 | Optimization | Required flag | Behavior |
 | --- | --- | --- |
 | PNM element-wise multiplication | `--EWMUL_PNM` | RMSNorm, RoPE, and FFN element-wise multiplies use PNM; systolic PIM also enables this implicitly, but write the flag explicitly. |
-| FlashAttention | `--flash-attention --flash-attention-block-size 1024` | Block QK/SV execution avoids the score DRAM workspace write/read. |
+| FlashAttention | `--flash-attention --flash-attention-block-size 2048` | Block QK/SV execution avoids the score DRAM workspace write/read. The default block is 2048 = 64 banks per KV head × 32 FP8 lanes; 1024 fills only half the QK lanes and nearly doubles QK waves at TP2. |
 | Pipelined Softmax | `--pipelined-softmax` | Apply the legacy QK/Softmax overlap model while retaining full Softmax work and dynamic energy. |
 | Channel concurrency | `--channel-concurrency` | Up to one accepted request per channel per cycle, across 32 channels, including expanded WR_GB bursts. |
 
@@ -132,7 +134,7 @@ python3 scripts/run_cent_memory_cases.py \
   --kv-head-tp-systolic --precision fp8 \
   --models Llama2-70B --context-windows 32768 --cases LPDDR4X_nCCD2 \
   --batch-sizes 4 \
-  --EWMUL_PNM --flash-attention --flash-attention-block-size 1024 \
+  --EWMUL_PNM --flash-attention --flash-attention-block-size 2048 \
   --pipelined-softmax --channel-concurrency \
   --record-command-trace --trace-workers 8 --run-workers 8
 cd ..
@@ -198,8 +200,9 @@ traces aligned to validated sidecar work budgets, otherwise a single
 channel's request-service counters apportioned by traced work. Startup,
 background, tail, and unidentified time remain explicit. There are no
 kernel completion timestamps in v0.0. PNM/CXL retain the legacy formulas;
-equivalent cycles use the recorded PIM clock, and residual arithmetic is
-marked unmodeled. FlashAttention without supported ownership metadata
+equivalent cycles use the recorded PIM clock. Residual adds use the PNM
+VEC_ADD formula when the source row records them; older rows mark them
+unmodeled. FlashAttention without supported ownership metadata
 retains its full total/formulas with PIM region attribution unavailable.
 
 With issued-command traces, `summary.txt` expands every PIM region into

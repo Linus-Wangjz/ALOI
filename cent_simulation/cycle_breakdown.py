@@ -202,6 +202,13 @@ def formula_ledger(row, metadata=None):
                  number(row, "Full softmax latency") * 1e6, "Full Softmax")
     assert_close(terms[("aux.ffn_activation", "pnm")]["duration_ns"],
                  number(row, "EWMUL activation latency") * 1e6, "FFN activation")
+    # AiM EWADD is a no-op; newer rows charge both residual adds to PNM.
+    # Older rows have no residual columns and keep them unmodeled.
+    for region, column in (("aux.attention_residual", "Attention residual latency"),
+                           ("aux.ffn_residual", "FFN residual latency")):
+        if row.get(column) not in (None, ""):
+            add(region, 8192 / 16 / channels * vec)
+            assert_close(terms[(region, "pnm")]["duration_ns"], number(row, column) * 1e6, column)
     pnm_ns = sum(t["duration_ns"] for (r, b), t in terms.items() if b == "pnm")
     assert_close(pnm_ns, number(row, "Acc latency") * 1e6, "PNM total")
     collective = number(row, "TP collective CXL latency") * 1e6
@@ -595,6 +602,8 @@ def analyze_case(row, *, log, timing, source_csv, trace=None, metadata_path=None
     diagnostics.extend([
         "PIM region allocations are estimates; no host/kernel completion timestamps exist",
         "Issued-gap ownership uses a validated emission protocol and one reference channel; shared stalls are not a unique causal attribution",
+        "PNM/CXL retain legacy formulas; residual adds use the PNM VEC_ADD formula"
+        if ("aux.attention_residual", "pnm") in formula else
         "PNM/CXL retain legacy formulas; residual EWADD arithmetic is unmodeled",
         "FP8 PIM does not change the legacy 16-element PNM/BF16 partial-vector formulas",
     ])
@@ -604,7 +613,8 @@ def analyze_case(row, *, log, timing, source_csv, trace=None, metadata_path=None
         for backend in ("pim", "pnm", "cxl"):
             value = formula.get((region_id, backend))
             is_pim_work = region_id in PIM_REGIONS.values() or region_id in ("aux.kv_update", "aux.score_transfer", "aux.ffn_activation")
-            unmodeled = region_id.endswith("residual") and backend == "pim"
+            unmodeled = (region_id.endswith("residual") and backend == "pim"
+                         and (region_id, "pnm") not in formula)
             unavailable = backend == "pim" and (
                 unmodeled or region_id == "aux.sync_control" or (is_pim_work and not decoded))
             duration = value["duration_ns"] if value else allocations[region_id] * period_ps / 1000 if backend == "pim" else 0.0
@@ -825,7 +835,7 @@ def render_summary(report):
                      f"device DQ={organization['dq_bits']}; prefetch={organization['prefetch']}; "
                      f"transaction={organization['transaction_bytes']} B; nBL={case['nBL']} clocks.")
     for region in report["regions"]:
-        if region["region_id"].endswith("residual"):
+        if region["region_id"].endswith("residual") and region["backends"]["pim"]["coverage"] == "unmodeled":
             lines.append(f"{region['display_name']}: arithmetic 未建模；旧账本没有单独计时。")
             continue
         if region["legacy_ledger_duration_ns"] == 0:
@@ -859,6 +869,64 @@ def csv_rows(report):
             row[f"{backend.upper()} coverage"] = term["coverage"]
         row["Full Softmax latency (us)"] = region["backends"]["pnm"]["full_work_duration_ns"] / 1000 if region["region_id"] == "aux.softmax" else None
         yield row
+
+
+PIM_TABLE_COLUMNS = (
+    ("MAC", lambda c: c.startswith("MAC")),
+    ("WRGB (GB input)", lambda c: c == "WRGB"),
+    ("WRMAC (accumulator init)", lambda c: c.startswith("WRMAC")),
+    ("RDMAC (result read)", lambda c: c.startswith("RDMAC")),
+    ("AF / RDAF", lambda c: c.startswith(("AF", "RDAF"))),
+    ("RD / WR (DRAM)", lambda c: c in ("RD", "WR")),
+    ("ACT / PRE", lambda c: c.startswith(("ACT", "PRE"))),
+    ("TMOD / CAS", lambda c: c == "TMOD" or c.startswith("CAS")),
+    ("Refresh", lambda c: c.startswith("REF")),
+    ("Startup / Tail", lambda c: c in ("STARTUP", "TAIL")),
+)
+
+
+def write_kernel_table(reports, path):
+    """Write kernels as rows grouped by variant, backends as grouped columns.
+
+    Every value is in reference-clock equivalent cycles except the last two
+    columns. PIM columns expand the issued-gap allocation; they include waits.
+    """
+    groups = (["", ""] + ["PIM"] * (len(PIM_TABLE_COLUMNS) + 1) + ["PNM"] * 2
+              + ["CXL", "Total", "Total", "Total"])
+    names = (["Variant", "Kernel"] + [name for name, _ in PIM_TABLE_COLUMNS] + ["PIM total"]
+             + ["PNM native cycles", "PNM equivalent cycles"]
+             + ["CXL equivalent cycles", "Equivalent cycles", "Latency (us)", "Share of block (%)"])
+    rows = []
+    for label, report in reports.items():
+        block_ns = report["full_run_totals"]["block_latency_ns"]
+        period_ps = report["reference_clock_period_ps"]
+        for region in report["regions"]:
+            if region["region_id"] == "aux.sync_control":
+                continue
+            pim = region["backends"]["pim"]
+            detail = region.get("pim_issued_gap_details") or {"commands": []}
+            buckets = [sum(e["gap_cycles"] for e in detail["commands"] if match(e["command"]))
+                       for _, match in PIM_TABLE_COLUMNS]
+            if pim["reference_equivalent_cycles"] is not None:
+                assert_close(sum(buckets) * period_ps / 1000, pim["duration_ns"], f"{label} {region['display_name']} PIM table")
+            pnm, cxl = region["backends"]["pnm"], region["backends"]["cxl"]
+            rows.append([label, region["display_name"]]
+                        + (["" for _ in buckets] + ["unmodeled"] if pim["reference_equivalent_cycles"] is None
+                           else buckets + [pim["reference_equivalent_cycles"]])
+                        + [pnm["formula_cycles"] or 0, pnm["reference_equivalent_cycles"],
+                           cxl["reference_equivalent_cycles"], region["reference_equivalent_cycles"],
+                           region["legacy_ledger_duration_ns"] / 1000,
+                           100 * region["legacy_ledger_duration_ns"] / block_ns])
+        totals = report["full_run_totals"]
+        column_sums = [sum(row[i] for row in rows if row[0] == label and isinstance(row[i], (int, float)))
+                       for i in range(2, len(names) - 3)]
+        assert_close(column_sums[len(PIM_TABLE_COLUMNS)] * period_ps / 1000, totals["pim_latency_ns"], f"{label} PIM total")
+        rows.append([label, "Block total"] + column_sums
+                    + [totals["reference_equivalent_cycles"], block_ns / 1000, 100.0])
+    with Path(path).open("w", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerows([groups, names])
+        writer.writerows([[f"{v:.3f}" if isinstance(v, float) else v for v in row] for row in rows])
 
 
 def write_report(report, output_dir):

@@ -903,6 +903,13 @@ class SystolicTPPNMEnergyTests(unittest.TestCase):
         )
         self.assertGreater(forced["EWMULActivation_latency"], 0.0)
         self.assertNotIn("EWMULActivation_latency", disabled)
+        residual = (
+            8192 / 16 / 32 * run_sim.ACCEL_CYCLE["VEC_ADD"]
+            / float(run_sim.FREQ / run_sim.KILO)
+        )
+        for key in ("AttentionResidual_latency", "FFNResidual_latency"):
+            self.assertAlmostEqual(forced[key], residual)
+            self.assertNotIn(key, disabled)
         self.assertEqual(
             explicit["EWMULActivation_latency"],
             forced["EWMULActivation_latency"],

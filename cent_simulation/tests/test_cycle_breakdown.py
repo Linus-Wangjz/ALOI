@@ -110,6 +110,22 @@ class FormulaTests(unittest.TestCase):
                          terms[("ffn.down_projection", "cxl")]["duration_ns"])
         self.assertIsNone(terms[("attention.o_projection", "cxl")]["formula_cycles"])
 
+    def test_pnm_residual_adds_join_the_ledger_when_recorded(self):
+        row = source_row(4)
+        # 8192 / 16 lanes / 32 channels * VEC_ADD(4) = 64 cycles * 0.5 ns, per batch.
+        row.update({"Attention residual latency": str(0.000032 * 4),
+                    "FFN residual latency": str(0.000032 * 4),
+                    "Acc latency": str((0.025995 + 0.000064) * 4)})
+        terms, _ = formula_ledger(row)
+        for region in ("aux.attention_residual", "aux.ffn_residual"):
+            self.assertAlmostEqual(terms[(region, "pnm")]["duration_ns"], 128)
+            self.assertAlmostEqual(terms[(region, "pnm")]["formula_cycles"], 256)
+        legacy, _ = formula_ledger(source_row(4))
+        self.assertNotIn(("aux.attention_residual", "pnm"), legacy)
+        row["FFN residual latency"] = "1"
+        with self.assertRaises(ValueError):
+            formula_ledger(row)
+
     def test_batch_applied_once_and_rmsnorms_separate(self):
         a, _ = formula_ledger(source_row())
         b, _ = formula_ledger(source_row(4))
